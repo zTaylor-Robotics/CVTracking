@@ -1,22 +1,13 @@
-from __future__ import print_function
-import datetime
-from threading import Thread
-import argparse
-import numpy as np
-import cv2 as cv
-import imutils
-import os
-
-
 #This is the ferrari class
 #When using this entandum with other programs, use obj.read() to get the next frame, then use obj.stop() to end the stream.
 class camObjThreaded:
-    W = 3000
-    H = 3000
+    W = 5000
+    H = 5000
     calibPathS = "calibCache/cam"
     calibPathE = ["_mtx.txt", "_dist.txt", "_rvecs.txt", "_tvecs.txt"]
 
-    def __init__(self, src, width):
+    #Mk1 def __init__()
+    """def __init__(self, src, width):
         self.stream = cv.VideoCapture(src, cv.CAP_DSHOW)
         self.camNum = src
         self.width = width
@@ -36,7 +27,6 @@ class camObjThreaded:
         self.start()
 
         cv.imshow("ID", self.frame)
-        cv.waitKey()
         self.ID = input("Please input the camera identity:")
         cv.destroyAllWindows()
 
@@ -63,7 +53,72 @@ class camObjThreaded:
 
         #insert live stream joke here
         #self.calFrame = cv.rotate(self.frame, cv.ROTATE_90_CLOCKWISE)
-        self.calFrame = self.frame
+        self.calFrame = self.frame """
+
+    #Mk2 def __init__()
+    def __init__(self, src, width = 0, height = 0):
+        self.camNum = src
+        self.stream = cv.VideoCapture(src, cv.CAP_DSHOW)
+        self.aRat = self.getStreamAspectRatio()
+        self.initStreamDimensions(width, height)
+        self.stream.set(cv.CAP_PROP_AUTOFOCUS, 0)
+        self.stopped = False
+        self.calbool = False
+
+        #Prompt User to identify camera and initializes self.frame for early self.read acquisitions
+        (_, frame) = self.stream.read()
+        self.frame = imutils.resize(frame, width = 640, height = int(width / self.aRat))
+        cv.imshow("ID", self.frame)
+        cv.waitKey(4000) #waits 4 seconds before closing, or any key press will exit the window. Purpose: display camera image to identify camera.
+        cv.destroyAllWindows()
+        self.ID = input("Please input the camera identity:")
+
+
+        self.start() #Start threaded stream
+        #Tests to see if cameras are calibrated (i.e. a folder in calibCache for the specified camera ID with the proper mtx and dist .txt files)
+        testPath = self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height)
+        if path.exists(testPath+self.calibPathE[0]):
+            if path.exists(testPath+self.calibPathE[1]):
+                self.mtx = np.loadtxt(
+                    self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[0])
+                self.dist = np.loadtxt(
+                    self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[1])
+                self.calbool = True
+            else:
+                print("Please Calibrate Cameras to Continue")
+                self.calibrate()
+        else:
+            print("Please Calibrate Cameras to Continue")
+            self.calibrate()
+        self.calFrame = self.frame #initializes the variable for early calls of self.read
+
+    def getStreamAspectRatio(self):
+        self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.W)
+        self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, self.H)
+        w = self.stream.get(cv.CAP_PROP_FRAME_WIDTH)
+        h = self.stream.get(cv.CAP_PROP_FRAME_HEIGHT)
+        return w/h
+
+    #Can be later user defined if ever needed
+    def initStreamDimensions(self, width, height):
+        if width == 0 or height == 0:
+            if width == 0:
+                self.height = height
+                self.width = int(height*self.aRat)
+                self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
+                self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
+
+            if height == 0:
+                self.width = width
+                self.height = int(width / self.aRat)
+                self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
+                self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
+
+        else:
+            self.height = height
+            self.width = width
+            self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
+            self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
 
     def start(self):
         Thread(target=self.update, args=()).start()
@@ -107,7 +162,7 @@ class camObjThreaded:
 
         input('Press [ENTER] to start calibration')
 
-        print('Calibration will 20 images: ')
+        print('Calibration will take 20 images: ')
         print('Take checkerboard, position it, and then press [ENTER] to add image to list:')
 
         objp = np.zeros((6 * 7, 3), np.float32)
@@ -155,8 +210,7 @@ class camObjThreaded:
         ret, mtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
 
         np.savetxt(self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[0], mtx)
-        np.savetxt(self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[1],
-                   dist)
+        np.savetxt(self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[1], dist)
         # np.savetxt(self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[2], rvecs)
         # np.savetxt(self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[3], tvecs)
         self.mtx = mtx
@@ -178,7 +232,7 @@ class camObjThreaded:
         print("[INFO] elasped time: {:.2f}".format(fps.elapsed()))
         print("[INFO] approx. FPS: {:.2f}".format(fps.fps()))
         cv.destroyAllWindows()
-        self.stop()
+        self.calbool = True
 
 #Old version, do not use unless u r DESPERATELY BAD AT CODE THINGS
 class camObj:
