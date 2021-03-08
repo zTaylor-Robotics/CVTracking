@@ -1,3 +1,13 @@
+from __future__ import print_function
+import datetime
+import os.path
+from os import path
+from threading import Thread
+import numpy as np
+import cv2 as cv
+import imutils
+import os
+
 #This is the ferrari class
 #When using this entandum with other programs, use obj.read() to get the next frame, then use obj.stop() to end the stream.
 class camObjThreaded:
