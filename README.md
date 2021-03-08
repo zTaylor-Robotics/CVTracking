@@ -4,6 +4,7 @@ Python scripts for tracking fiducials via overhead mounted cameras using the Ope
 Camera.py:
 
   Two classes are introduced which help to initialize a usb webcamera and to initialize a webcamera stream. 
+  
   Class: camObjThreaded:
     A class which takes in the video source (a number from 0 - n) which represents the dev/video# used to initialize and OpenCV capture device.
     The other intialization variable is the width. This defines the width of the stream. This is to allow for smaller resolutions which will increase processing speeds.
