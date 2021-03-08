@@ -14,7 +14,7 @@ class camObjThreaded:
     W = 5000
     H = 5000
     calibPathS = "calibCache/cam"
-    calibPathE = ["_mtx.txt", "_dist.txt", "_rvecs.txt", "_tvecs.txt"]
+    calibPathE = ["_mtx.txt", "_dist.txt"]
     
     #Mk2 def __init__()
     def __init__(self, src, width = 0, height = 0):
@@ -103,11 +103,9 @@ class camObjThreaded:
                 tempFrame = cv.undistort(tempFrame, self.mtx, self.dist, None, newcameramtx)
                 x, y, w, h = roi
                 tempFrame = tempFrame[y:y + h, x:x + w]
-                #self.calFrame = cv.rotate(tempFrame, cv.ROTATE_90_CLOCKWISE)
                 self.calFrame = tempFrame
             else:
                 self.frame = imutils.resize(self.frame, width = 1280)
-                #self.calFrame = cv.rotate(self.frame, cv.ROTATE_90_CLOCKWISE)
                 self.calFrame = self.frame
             fps.update()
 
@@ -127,9 +125,7 @@ class camObjThreaded:
         print('Take checkerboard, position it, and then press [ENTER] to add image to list:')
 
         objp = np.zeros((6 * 7, 3), np.float32)
-        # objp = np.zeros((3 * 5, 3), np.float32)
         objp[:, :2] = np.mgrid[0:7, 0:6].T.reshape(-1, 2)
-        # objp[:, :2] = np.mgrid[0:5, 0:3].T.reshape(-1, 2)
 
         objpoints = []
         imgpoints = []
@@ -147,14 +143,13 @@ class camObjThreaded:
             gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
 
             ret, corners = cv.findChessboardCorners(gray, (7, 6), None)
-            # ret, corners = cv.findChessboardCorners(gray, (5, 3), None)
 
             if ret == True:
                 objpoints.append(objp)
                 corners2 = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
                 imgpoints.append(corners)
                 cv.drawChessboardCorners(frame, (7, 6), corners, ret)
-                # cv.drawChessboardCorners(frame, (5, 3), corners, ret)
+
                 frame = imutils.resize(frame, width=640)
                 cv.imshow("Good Image", frame)
                 cv.imwrite("calibCache/cam" + self.ID + "/goodImg/img" + str(count) + ".png", frame)
@@ -172,8 +167,7 @@ class camObjThreaded:
 
         np.savetxt(self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[0], mtx)
         np.savetxt(self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[1], dist)
-        # np.savetxt(self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[2], rvecs)
-        # np.savetxt(self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[3], tvecs)
+
         self.mtx = mtx
         self.dist = dist
         self.rvecs = rvecs
