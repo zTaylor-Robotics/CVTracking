@@ -13,7 +13,7 @@ Camera.py:
   Two classes are introduced which help to initialize a usb webcamera and to initialize a webcamera stream. 
   
   Class: camObjThreaded:
-    A class which takes in the video source (a number from 0 - n) which represents the dev/video# used to initialize and OpenCV capture device.
+    A class which takes in the video source (a number from 0 - n) which represents the dev/video# used to initialize an OpenCV capture device.
     The other intialization variable is the width. This defines the width of the stream. This is to allow for smaller resolutions which will increase processing speeds.
 
     def __init__(): takes in the values mentioned above and then initializes the camera with a user-guided prompt. This checks to make sure the camera is calibrated for intended operations
