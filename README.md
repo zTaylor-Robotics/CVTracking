@@ -1,6 +1,13 @@
 # CVTracking
 Python scripts for tracking fiducials via overhead mounted cameras using the OpenCV API
 
+References: 
+  A lot of the code written has been pulled from or inspired by various amazing resources from great content creators. 
+  A few shout outs include:
+    Adrian Rosebrock from https://www.pyimagesearch.com
+    OpenCV Team and Contributors for tutorials, demonstrations, and source code.
+    ...
+    
 Camera.py:
 
   Two classes are introduced which help to initialize a usb webcamera and to initialize a webcamera stream. 
