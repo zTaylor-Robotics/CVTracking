@@ -4,9 +4,9 @@ Python scripts for tracking fiducials via overhead mounted cameras using the Ope
 References: 
   A lot of the code written has been pulled from or inspired by various amazing resources from great content creators. 
   A few shout outs include:
-    Adrian Rosebrock from https://www.pyimagesearch.com
-    OpenCV Team and Contributors for tutorials, demonstrations, and source code.
-    ...
+  Adrian Rosebrock from https://www.pyimagesearch.com
+  OpenCV Team and Contributors for tutorials, demonstrations, and source code.
+  ...
     
 Camera.py:
 
