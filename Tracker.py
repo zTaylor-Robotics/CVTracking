@@ -13,18 +13,18 @@ class track:
     arucoType = "DICT_5x5_1000"
     arucoDict = cv.aruco.Dictionary_get(cv.aruco.DICT_5X5_100)
     arucoParams = cv.aruco.DetectorParameters_create()
-    def __init__(self, camObjList, arucoSize, markerID = 0, targetID = 100):
+    path4RelMats = ["L/LwrtG.txt", "CL/CLwrtG.txt", "C/CwrtG.txt","CR/CRwrtG.txt","R/RwrtG.txt"]
+    def __init__(self, camObjList, markerID = 0, targetID = 100):
         self.camObjList = camObjList
         self.tarBool = False
         self.markerID = markerID
         self.targetID = targetID
-        self.arucoSize = arucoSize
         self.targetLocation = 0
 
     def __str__(self):
         return "This is a tracker which takes in frames and detects aruco markers, nothin but a tool"
 
-    def projectTracker(self, trialName):
+    def projectTracker(self, trialName, aruSize): #target size must be the same size as markerID
         path = "trialCache/trial_" + trialName + ".csv"
         csv = open(path, "w+")
         csv.close()
@@ -42,7 +42,7 @@ class track:
                 startA = False
             currentTime = time.time()
             for i in self.camObjList:
-                bool, frame, markID, m2camTMat = self.arucoDetect(i)
+                bool, frame, markID, m2camTMat = self.arucoDetect(i, arID = 1000, arSize = aruSize)
                 frame = imutils.resize(frame, width = 480)
                 cv.imshow("cam"+i.ID, frame)
                 if bool and markID == self.markerID:
@@ -80,15 +80,15 @@ class track:
                 return cam2globTMat*m2camTMat
         return m2camTMat
 
-    def arucoDetect(self, camObj):
+    def arucoDetect(self, camObj, arID=1000, arSize = 0):
         while True:
             frame = camObj.read()
             (corners, ids, rejected) = cv.aruco.detectMarkers(frame, self.arucoDict, parameters = self.arucoParams)
             if len(corners) > 0:
-                rvec, tvec, markerPoints = cv.aruco.estimatePoseSingleMarkers(corners, self.arucoSize, camObj.mtx, camObj.dist)
+                rvec, tvec, markerPoints = cv.aruco.estimatePoseSingleMarkers(corners, arSize, camObj.mtx, camObj.dist)
                 (rvec - tvec).any()
                 ids=ids.flatten()
-                cv.aruco.drawAxis(frame, camObj.mtx, camObj.dist, rvec, tvec, self.arucoSize*0.4)
+                cv.aruco.drawAxis(frame, camObj.mtx, camObj.dist, rvec, tvec, arSize*0.4)
                 #cv.aruco.drawDetectedMarkers(frame, corners, ids)
                 for (markID, markTvec, markRvec) in zip(ids, tvec, rvec):
                     if markID == self.markerID:
@@ -102,6 +102,12 @@ class track:
                         _, ttvec = self.tMat2rT(t2g)
                         self.targetLocation = ttvec
                         self.tarBool = True
+
+                    #default values makes this impossible to reach by default
+                    #specifically used for camera relations
+                    if markID == arID:
+                        m2camTMat = self.rT2tMat(markRvec[0],markTvec[0])
+                        return True, frame, markID, m2camTmat
 
                     else: return False, frame, "", 0
             else: return False, frame, "", 0
@@ -118,6 +124,59 @@ class track:
             y = math.atan2(-R[2, 0], sy)
             z = 0
         return np.array([x, y, z])
+
+    #Specifically tooled for the design project
+    #Goes from defining the global frame in  camera "L" to defining all camera relationships if they arent defined already.
+    #Aruco1 should be in the previous frame point its positive y-axis into the current frame. Aruco2 shoudl be in the current
+    #   frame with its positive y-axis pointing to the next frame.
+    def getCameraRelations(self, GID, GaruSize, AR1ID, AR2ID, ARsize, L ):
+        bool = True
+        path = "calibCache/cam"
+
+        #defines aruco2 w.r.t aruco1 transformation matrix
+        A2wrtA1 = np.zeros((4,4))
+        for j in range(4):
+            for k in range(4):
+                if j == k: A2wrtA1[j,k] = 1
+                elif k == 3 and j == 1: A2wrtA1[j,k] = L
+        print(A2wrtA1)
+
+        if self.camObjList[0].ID != "L":
+            print("#Notice:-------------------------------------------#")
+            print("#----Please exit and initialize the left camera----#")
+            print("#--------------------------------------------------#")
+            bool = False
+        #Makes sure that all cameras follow the necessary order.
+        if bool:
+            for i in range(len(self.camObjList)):
+                if self.camObjList[i].ID == "L":
+                    print("Position marker for the global frame and press [ENTER]:")
+                    while True:
+                        boolA, frame, _, m2camTmat = self.arucoDetect(self.camObjList[i].ID, arID = GID, arSize = GaruSize)
+                        cv.imshow("cal", imutils.resize(frame, width = 480))
+                        if cv.waitKey(1) == 13 and bool:
+                            LwrtG = np.linalg.inv(m2camTmat)
+                            self.storeCamRelatMat(path + self.path4RelMats[i], LwrtG)
+                            temp = LwrtG
+                            break
+                        elif cv.waitKey(1) == 13: print("Please press [Enter] to try again!")
+                if i.ID !="L":
+                    while True:
+                        boolA, frameA, _, m2camTmatA = self.arucoDetect(self.camObjList[i-1].ID, arID = AR1ID, arSize = ARsize)
+                        boolB, frameB, _, m2camTmatB = self.arucoDetect(self.camObjList[i].ID, arID = AR2ID, arSize = ARsize)
+                        cv.imshow("calA", imutils.resize(frameA, width=480))
+                        cv.imshow("calB", imutils.resize(frameB, width=480))
+                        if cv.waitKey(1) == 13:
+                            if boolA and boolB:
+                                temp = temp*m2camTmatA*A2wrtA1*np.linalg.inv(m2camTmatB)
+                                self.storeCamRelatMat(path + self.path4RelMats[i], temp)
+                            pass
+
+
+
+
+    def storeCamRelatMat(self, path, CamwrtGMat):
+        np.savetxt(path,CamwrtGMat)
 
     def getCameraRelations1Ar(self, camObj1, camObj2, targetID):
         print('Please position the aruco marker in view of both cameras')
