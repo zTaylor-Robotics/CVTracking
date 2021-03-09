@@ -67,7 +67,10 @@ class camObjThreaded:
         self.calFrame = self.frame """
 
     #Mk2 def __init__()
-    def __init__(self, src, width = 0, height = 0):
+    #Default parameter: globalFrame = 0 declares that there is no global frame defined in a txt file.
+    #                   globalFrame = 1 declares that there is a global frame defined in a txt file.
+    #                           use the define relations function within the Tracker.py to define the global frame
+    def __init__(self, src, width = 0, height = 0, globalFrame = 0):
         self.camNum = src
         self.stream = cv.VideoCapture(src, cv.CAP_DSHOW)
         self.aRat = self.getStreamAspectRatio()
@@ -83,7 +86,13 @@ class camObjThreaded:
         cv.waitKey(2500) #waits 2.5 seconds before closing, or any key press will exit the window. Purpose: display camera image to identify camera.
         cv.destroyAllWindows()
         self.ID = input("Please input the camera identity:")
-
+        if path.exists(self.calibPathS+self.ID+"/c2gTmat.txt") and globalFrame == 1:
+            self.c2gTmat = np.loadtx(self.calibPathS+self.ID+"/c2gTmat.txt")
+        else:
+            self.c2gTmat = 0
+            print("#--------------------------------------------------------#")
+            print("#-----Camera Relation to Global Frame is not Defined-----#")
+            print("#--------------------------------------------------------#")
 
         self.start() #Start threaded stream
         #Tests to see if cameras are calibrated (i.e. a folder in calibCache for the specified camera ID with the proper mtx and dist .txt files)
