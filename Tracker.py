@@ -6,98 +6,118 @@ import cv2 as cv
 import pandas as pd
 import time
 import imutils
+import os
+import math
 
 class track:
     arucoType = "DICT_5x5_1000"
     arucoDict = cv.aruco.Dictionary_get(cv.aruco.DICT_5X5_100)
     arucoParams = cv.aruco.DetectorParameters_create()
-    def __init__(self):
-        pass
+    def __init__(self, camObjList, arucoSize, markerID = 0, targetID = 100):
+        self.camObjList = camObjList
+        self.tarBool = False
+        self.markerID = markerID
+        self.targetID = targetID
+        self.arucoSize = arucoSize
+        self.targetLocation = 0
+
     def __str__(self):
         return "This is a tracker which takes in frames and detects aruco markers, nothin but a tool"
-    def arucoDetect(self, camObj, arucoSize, targetID):
-        while True:
-            frame = camObj.read()
-            (corners, ids, rejected) = cv.aruco.detectMarkers(frame, self.arucoDict, parameters = self.arucoParams)
-            if len(corners) > 0:
-                rvec, tvec, markerPoints = cv.aruco.estimatePoseSingleMarkers(corners, arucoSize, camObj.mtx, camObj.dist)
-                (rvec - tvec).any()
-                ids=ids.flatten()
-                cv.aruco.drawDetectedMarkers(frame, corners)
-                cv.aruco.drawAxis(frame, camObj.mtx, camObj.dist, rvec, tvec, 3)
-                for (markerCorner, markerID, markerTvec, markerRvec) in zip(corners, ids, tvec, rvec):
-                    corners = markerCorner.reshape((4,2))
-                    (topLeft, topRight, bottomRight, bottomLeft) = corners
 
-                    #topRight = (int(topRight[0]), int(topRight[1]))
-                    topLeft = (int(topLeft[0]), int(topLeft[1]))
-                    #bottomRight = (int(bottomRight[0]), int(bottomRight[1]))
-                    #bottomLeft = (int(bottomLeft[0]), int(bottomLeft[1]))
-
-                    #cv.line(frame, topLeft, topRight, (0, 255, 0), 2)
-                    #cv.line(frame, topRight, bottomRight, (0, 255, 0), 2)
-                    #cv.line(frame, bottomRight, bottomLeft, (0, 255, 0), 2)
-                    #cv.line(frame, bottomLeft, topLeft, (0, 255, 0), 2)
-
-                    #cX = int((topLeft[0] + bottomRight[0]) / 2.0)
-                    #cY = int((topLeft[1] + bottomRight[1]) / 2.0)
-
-                    #cv.circle(frame, (cX, cY), 4, (0, 0, 255), -1)
-                    cv.putText(frame, str(markerID), (topLeft[0], topLeft[1] - 15), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                    if markerID == targetID:
-                        print(markerTvec)
-                    #print(np.linalg.norm(np.array((topLeft[0],topLeft[1],0))-np.array((bottomLeft[0],bottomLeft[1],0))))
-                        return True, frame, markerID, markerRvec[0], markerTvec[0]
-                    else: return False, frame, "", 0, 0
-            else: return False, frame, "", 0, 0
-
-
-    def arucoTestFeed(self,camObj, arucoSize, trialName, targetID):
-        path = "trialCache/trial_"+trialName+".csv"
+    def projectTracker(self, trialName):
+        path = "trialCache/trial_" + trialName + ".csv"
         csv = open(path, "w+")
         csv.close()
         totalDist = 0
-        start = True
+        startA = True
+        startB = True
         clock = 0
         prevTime = 0
+
         fps = FPS().start()
         while True:
+            if self.tarBool and startA:
+                print("Target Location:")
+                print(self.targetLocation)
+                startA = False
             currentTime = time.time()
-            bool, frame, markerID, rvec, tvec = self.arucoDetect(camObj, arucoSize, targetID)
-            if bool == True:
-                #For project convention, if ID = targetID == 0, then its the human trial
-                #For project convention, if ID = targetID != 0, then its the robot trial
-                if markerID == 0:
-                    id = "Human"
-                else:
-                    id = "Robot"
-
-                #If this is the first maker grab, then it initializes prevPoint
-                if start:
-                    prevPoint = tvec
-                    start = False
-                else:
-                    currentPoint = tvec
-                    totalDist += np.linalg.norm(currentPoint-prevPoint)
-                    prevPoint = currentPoint
-
-                h, w = frame.shape[:2]
-                df = pd.DataFrame({'ID':[id], 'Time': clock, 'X': tvec[0], 'Y': tvec[1], 'Z': tvec[2]})
-                with open(path, 'a') as f:
-                    if clock == 0:
-                        df.to_csv(f, header = True, index = False, line_terminator='\n')
-                    else:
-                        df.to_csv(f, header = False, index = False, line_terminator='\n')
-                clock += (currentTime - prevTime)
-            cv.imshow("Feed", frame)
+            for i in self.camObjList:
+                bool, frame, markID, m2camTMat = self.arucoDetect(i)
+                frame = imutils.resize(frame, width = 480)
+                cv.imshow("cam"+i.ID, frame)
+                if bool and markID == self.markerID:
+                    self.storeResults(m2camTMat, markID, path, clock)
+                    clock += (currentTime - prevTime)
+                    break
             if cv.waitKey(1) == 13:
                 break
             prevTime = currentTime
             fps.update()
         fps.stop()
-        print("[INFO] elasped time: {:.2f}".format(fps.elapsed()))
-        print("[INFO] approx. FPS: {:.2f}".format(fps.fps()))
+        print("[INFO] approx. Loops per second: {:.2f}".format(fps.fps()))
         cv.destroyAllWindows()
+        self.tarBool = False
+        self.targetLocation = 0
+
+    def storeResults(self, m2camTMat, markID, path, clock):
+        m2globTMat = self.getMarkerRelationToGlobal(m2camTMat,markID)
+        rMat, tvec = self.tMat2rT(m2globTMat)
+        Rx, Ry, Rz = self.rotationMatrixToEulerAngles(rMat)
+        df = pd.DataFrame({'ID': [id], 'Time': clock, 'X': tvec[0], 'Y': tvec[1], 'Z': tvec[2], 'Rx':Rx, 'Ry':Ry, 'Rz':Rz})
+        with open(path, 'a') as f:
+            if clock == 0:
+                df.to_csv(f, header=True, index=False, line_terminator='\n')
+            else:
+                df.to_csv(f, header=False, index=False, line_terminator='\n')
+
+    def getTargetLocation(self):
+        return self.targetLocation
+
+    def getMarkerRelationToGlobal(self, m2camTMat, camID):
+        for i in self.camObjList:
+            if i.ID == camID:
+                cam2globTMat = i.c2gTmat
+                return cam2globTMat*m2camTMat
+        return m2camTMat
+
+    def arucoDetect(self, camObj):
+        while True:
+            frame = camObj.read()
+            (corners, ids, rejected) = cv.aruco.detectMarkers(frame, self.arucoDict, parameters = self.arucoParams)
+            if len(corners) > 0:
+                rvec, tvec, markerPoints = cv.aruco.estimatePoseSingleMarkers(corners, self.arucoSize, camObj.mtx, camObj.dist)
+                (rvec - tvec).any()
+                ids=ids.flatten()
+                cv.aruco.drawAxis(frame, camObj.mtx, camObj.dist, rvec, tvec, self.arucoSize*0.4)
+                #cv.aruco.drawDetectedMarkers(frame, corners, ids)
+                for (markID, markTvec, markRvec) in zip(ids, tvec, rvec):
+                    if markID == self.markerID:
+                        m2camTMat = self.rT2tMat(markRvec[0],markTvec[0]) #Gets the transformation of the aruco markers location and orientation w.r.t. the camera frame
+                        #print(mark_wrt_cam_tMat)
+                        return True, frame, markID, m2camTMat
+
+                    #defines target location as an object parameter if the specified target is found
+                    if markID == self.targetID and self.tarBool == False:
+                        t2g = self.getMarkerRelationToGlobal(self.rT2tMat(markRvec[0], markTvec[0]))
+                        _, ttvec = self.tMat2rT(t2g)
+                        self.targetLocation = ttvec
+                        self.tarBool = True
+
+                    else: return False, frame, "", 0
+            else: return False, frame, "", 0
+
+    def rotationMatrixToEulerAngles(self, R):
+        sy = math.sqrt(R[0,0] * R[0,0] +  R[1,0] * R[1,0])
+        singular = sy < 1e-6
+        if not singular:
+            x = math.atan2(R[2, 1], R[2, 2])
+            y = math.atan2(-R[2, 0], sy)
+            z = math.atan2(R[1, 0], R[0, 0])
+        else:
+            x = math.atan2(-R[1, 2], R[1, 1])
+            y = math.atan2(-R[2, 0], sy)
+            z = 0
+        return np.array([x, y, z])
 
     def getCameraRelations1Ar(self, camObj1, camObj2, targetID):
         print('Please position the aruco marker in view of both cameras')
@@ -156,27 +176,25 @@ class track:
         pass
 
     #Turns the rotation matrix and translation matrix into a transformation matrix.
-    def rT2TransformationMtx(self, rvec, tvec):
+    def rT2tMat(self, rvec, tvec):
         rmat, _ = cv.Rodrigues(rvec)
-        transMtx = np.zeros(4,4)
+        transMtx = np.zeros((4,4))
         for i in range(4):
             for j in range(4):
-                if i != 3 and j != 3: transMtx[i][j] = rmat[i][j]
-                elif j == 3 and i != 3: transMtx[i][3] = tvec[i]
-                elif i == 3 and j != 3: transMtx[3][j] = 0
-                else: transMtx[3][3] = 1
-        print(transMtx)
+                if i < 3 and j < 3: transMtx[i,j] = rmat[i,j]
+                elif j == 3 and i < 3:
+                    transMtx[i,3] = tvec[i]
+                elif i == 3 and j < 3: transMtx[3,j] = 0
+                else: transMtx[3,3] = 1
         return transMtx
 
-    def Tmat2RotTrans(self, transMtx):
-        rmat = np.zeros(3,3)
+    def tMat2rT(self, transMtx):
+        rmat = np.zeros((3,3))
         tvec = []
         for i in range(3):
             for j in range(4):
-                if j != 3: rmat[i][j] = transMtx[i][j]
-                elif j == 3: tvec[i] = transMtx[i][3]
-        print(rmat)
-        print(tvec)
+                if j < 3: rmat[i,j] = transMtx[i,j]
+                elif j == 3: tvec.append(transMtx[i,3])
         return rmat, tvec
 
 
