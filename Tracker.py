@@ -15,7 +15,7 @@ class track:
         pass
     def __str__(self):
         return "This is a tracker which takes in frames and detects aruco markers, nothin but a tool"
-    def arucoDetect(self, camObj, arucoSize):
+    def arucoDetect(self, camObj, arucoSize, targetID):
         while True:
             frame = camObj.read()
             (corners, ids, rejected) = cv.aruco.detectMarkers(frame, self.arucoDict, parameters = self.arucoParams)
@@ -23,32 +23,36 @@ class track:
                 rvec, tvec, markerPoints = cv.aruco.estimatePoseSingleMarkers(corners, arucoSize, camObj.mtx, camObj.dist)
                 (rvec - tvec).any()
                 ids=ids.flatten()
-                for (markerCorner, markerID) in zip(corners, ids):
+                cv.aruco.drawDetectedMarkers(frame, corners)
+                cv.aruco.drawAxis(frame, camObj.mtx, camObj.dist, rvec, tvec, 3)
+                for (markerCorner, markerID, markerTvec, markerRvec) in zip(corners, ids, tvec, rvec):
                     corners = markerCorner.reshape((4,2))
                     (topLeft, topRight, bottomRight, bottomLeft) = corners
 
-                    topRight = (int(topRight[0]), int(topRight[1]))
+                    #topRight = (int(topRight[0]), int(topRight[1]))
                     topLeft = (int(topLeft[0]), int(topLeft[1]))
-                    bottomRight = (int(bottomRight[0]), int(bottomRight[1]))
-                    bottomLeft = (int(bottomLeft[0]), int(bottomLeft[1]))
+                    #bottomRight = (int(bottomRight[0]), int(bottomRight[1]))
+                    #bottomLeft = (int(bottomLeft[0]), int(bottomLeft[1]))
 
-                    cv.line(frame, topLeft, topRight, (0, 255, 0), 2)
-                    cv.line(frame, topRight, bottomRight, (0, 255, 0), 2)
-                    cv.line(frame, bottomRight, bottomLeft, (0, 255, 0), 2)
-                    cv.line(frame, bottomLeft, topLeft, (0, 255, 0), 2)
+                    #cv.line(frame, topLeft, topRight, (0, 255, 0), 2)
+                    #cv.line(frame, topRight, bottomRight, (0, 255, 0), 2)
+                    #cv.line(frame, bottomRight, bottomLeft, (0, 255, 0), 2)
+                    #cv.line(frame, bottomLeft, topLeft, (0, 255, 0), 2)
 
-                    cX = int((topLeft[0] + bottomRight[0]) / 2.0)
-                    cY = int((topLeft[1] + bottomRight[1]) / 2.0)
+                    #cX = int((topLeft[0] + bottomRight[0]) / 2.0)
+                    #cY = int((topLeft[1] + bottomRight[1]) / 2.0)
 
-                    cv.circle(frame, (cX, cY), 4, (0, 0, 255), -1)
+                    #cv.circle(frame, (cX, cY), 4, (0, 0, 255), -1)
                     cv.putText(frame, str(markerID), (topLeft[0], topLeft[1] - 15), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                    #print(tvec)
+                    if markerID == targetID:
+                        print(markerTvec)
                     #print(np.linalg.norm(np.array((topLeft[0],topLeft[1],0))-np.array((bottomLeft[0],bottomLeft[1],0))))
-                return True, frame, cX, cY, markerID, rvec, tvec
-            else: return False, frame, 0, 0, "", 0, 0
+                        return True, frame, markerID, markerRvec[0], markerTvec[0]
+                    else: return False, frame, "", 0, 0
+            else: return False, frame, "", 0, 0
 
-    
-    def arucoTestFeed(self,camObj, arucoSize, trialName):
+
+    def arucoTestFeed(self,camObj, arucoSize, trialName, targetID):
         path = "trialCache/trial_"+trialName+".csv"
         csv = open(path, "w+")
         csv.close()
@@ -59,21 +63,26 @@ class track:
         fps = FPS().start()
         while True:
             currentTime = time.time()
-            bool, frame, x, y, markerID, rvec, tvec = self.arucoDetect(camObj, arucoSize)
+            bool, frame, markerID, rvec, tvec = self.arucoDetect(camObj, arucoSize, targetID)
             if bool == True:
+                #For project convention, if ID = targetID == 0, then its the human trial
+                #For project convention, if ID = targetID != 0, then its the robot trial
                 if markerID == 0:
                     id = "Human"
                 else:
                     id = "Robot"
+
+                #If this is the first maker grab, then it initializes prevPoint
                 if start:
-                    prevPoint = np.array((x, y, 0))
+                    prevPoint = tvec
                     start = False
                 else:
-                    currentPoint = np.array((x, y, 0))
+                    currentPoint = tvec
                     totalDist += np.linalg.norm(currentPoint-prevPoint)
                     prevPoint = currentPoint
+
                 h, w = frame.shape[:2]
-                df = pd.DataFrame({'ID':[id], 'Time': clock, 'X': x, 'Y': h - y})
+                df = pd.DataFrame({'ID':[id], 'Time': clock, 'X': tvec[0], 'Y': tvec[1], 'Z': tvec[2]})
                 with open(path, 'a') as f:
                     if clock == 0:
                         df.to_csv(f, header = True, index = False, line_terminator='\n')
@@ -89,9 +98,8 @@ class track:
         print("[INFO] elasped time: {:.2f}".format(fps.elapsed()))
         print("[INFO] approx. FPS: {:.2f}".format(fps.fps()))
         cv.destroyAllWindows()
-        camObj.stop()
 
-    def getCameraRelations(self, camObj1, camObj2, arucoSize):
+    def getCameraRelations1Ar(self, camObj1, camObj2, targetID):
         print('Please position the aruco marker in view of both cameras')
         print('Then press enter to get camera relations')
         while True:
@@ -140,3 +148,35 @@ class track:
         camObj1.stop()
         camObj2.stop()
         print("Relations Found")
+
+    def getCameraRelations2Ar(self, camObj1, camObj2, arucoSize, AR1ID, AR2ID, L):
+        pass
+
+    def getCameraRelationsL2G(self, camObj, arucoSize, targetID):
+        pass
+
+    #Turns the rotation matrix and translation matrix into a transformation matrix.
+    def rT2TransformationMtx(self, rvec, tvec):
+        rmat, _ = cv.Rodrigues(rvec)
+        transMtx = np.zeros(4,4)
+        for i in range(4):
+            for j in range(4):
+                if i != 3 and j != 3: transMtx[i][j] = rmat[i][j]
+                elif j == 3 and i != 3: transMtx[i][3] = tvec[i]
+                elif i == 3 and j != 3: transMtx[3][j] = 0
+                else: transMtx[3][3] = 1
+        print(transMtx)
+        return transMtx
+
+    def Tmat2RotTrans(self, transMtx):
+        rmat = np.zeros(3,3)
+        tvec = []
+        for i in range(3):
+            for j in range(4):
+                if j != 3: rmat[i][j] = transMtx[i][j]
+                elif j == 3: tvec[i] = transMtx[i][3]
+        print(rmat)
+        print(tvec)
+        return rmat, tvec
+
+
