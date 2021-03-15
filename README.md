@@ -18,16 +18,26 @@ Camera.py:
       This is to provide a storage point for the mtx and dists from calibration for future use (I.E. not needing to calibrate every time)
       badImg and goodImg are directories which contain the good and bad calibration images.
 
-      \ProjectFolder
-      ---\calibCache
-      ------\cam"ID"
-      ---------\badImg
-      ---------\goodImg
-      ---------\rotationMatrices
-      ---------\translationMatrices
-      ---------\resolution_mtx.txt
-      ---------\resolution_dist.txt
-      ---\trialCache
+      ProjectFolder/
+          calibCache/
+              cam+name/
+                  badImg/
+                  goodImg/
+                  resolution_mtx.txt <- calibration camera matrix
+                  resolution_dist.txt < - calibration distortion vector
+                  namewrtG.txt < - cameras relation to the global frame
+              cam+name/
+              .
+              .
+              .
+          trialCache/
+              trial_name/
+                  camera_name/
+                  camera_name/
+                  .
+                  .
+                  .
+                  data.csv
 
     def calibrate(): runs through an automated process of calibrating which takes images until 20 good images are captured based on the checkerboard
       calibration.
