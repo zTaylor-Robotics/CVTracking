@@ -1,3 +1,4 @@
+from __future__ import print_function
 from camera import camObjThreaded as cmt
 from camera import FPS
 import cv2 as cv
@@ -21,21 +22,62 @@ class Track:
     #projFlag is the users way of specifying that the
     #-robotArucoID = the ID of the aruco marker which is on top of the robot
     #-targetID = the ID of the marker which represents the target
-    def __init__(self, camObjList, robotArucoID = 0, targetID = 99):
+    def __init__(self, camObjList, streamEnable, write_enable, robotArucoIDs, targetID = 99, sortEnable = True):
         #Preprocessing step for camera list to arrange the camera objects in proper reading order
+        self.sortEnable = sortEnable
         self.camObjList = self.sortCamObjList(camObjList)
-
+        self.streamEnable = streamEnable
+        self.writeEnable = write_enable
         #Uncomment the following two lines to allow for debugging
         #self.camObjList = camObjList
         #self.camObjList[0].cameraWRTGlobalTMatFlag = True
 
         #Initializes information about the robot: Defaults to 0
-        self.robotArucoID = robotArucoID
+        self.robotArucoIDs = robotArucoIDs
 
         #Initializes information about the target: Defaults to 99
         self.targetID = targetID
         self.targetFlag = False
         self.targetLocation = np.zeros((1,3))
+
+
+    def getCamError(self, A1ID, A2ID, L, arucoSize):
+        camera = self.camObjList[0]
+
+        pathCSV = "calibCache/cam"+camera.ID+"/camError.csv"
+        csv = open(pathCSV, "w+")
+        csv.close()
+        df = pd.DataFrame({'ID': [0], 'Ex': 0, 'Ey': 0, 'Ez': 0, 'Erx': 0,'Ery': 0, 'Erz': 0})
+        with open(pathCSV, 'a') as f:
+            df.to_csv(f, header=True, index=False, line_terminator='\n')
+        count = 0
+        while True:
+            for camera in self.camObjList:
+                aDFlag, frame, ids, tvec, rvec = self.arucoDetect(camera, arucoSize)
+                frame = cv.resize(frame, (640, int(640 / camera.aspectRatio)))
+                cv.imshow("Cam_" + camera.ID, frame)
+                if aDFlag:
+                    TBool, index1, index2 = self.getIndex12(A1ID, A2ID, ids)
+                    if TBool:
+                        rvec1 = rvec[index1]
+                        tvec1 = tvec[index1]
+                        TMat1 = self.rtvec2TMat(rvec1[0], tvec1[0])
+                        rvec2 = rvec[index2]
+                        tvec2 = tvec[index2]
+                        TMat2 = self.rtvec2TMat(rvec2[0], tvec2[0])
+                        A2wrtA1 = np.dot(np.linalg.inv(TMat1), TMat2)
+                        A2A1rMat, A2A1tvec = self.TMat2rtvec(A2wrtA1)
+                        print(A2A1rMat)
+                        A2A1tvec = A2A1tvec[0]
+                        Rx, Ry, Rz = self.rotationMatrixToEulerAngles(A2A1rMat)
+                        df = pd.DataFrame({'ID':[count], 'Ex': A2A1tvec[0], 'Ey': A2A1tvec[1]-L, 'Ez':A2A1tvec[2], 'Erx':Rx, 'Ery':Ry, 'Erz':Rz})
+                        with open(pathCSV, 'a') as f:
+                            df.to_csv(f, header=False, index=False, line_terminator='\n')
+                        count += 1
+
+                if cv.waitKey(1) == 13:
+                    cv.destroyAllWindows()
+                    return
 
     #directories need to be deleted of the same name or else these will go poopy-dook
     def projectTracker(self, trialName, arucoSize):
@@ -46,60 +88,75 @@ class Track:
             for camera in self.camObjList:
                 os.mkdir("trialCache/trial_"+trialName+"/camera_"+camera.ID)
 
-            path = "trialCache/trial_" + trialName + "/data.csv"
-            csv = open(path, "w+")
+            pathCSV = "trialCache/trial_" + trialName + "/data.csv"
+            csv = open(pathCSV, "w+")
             csv.close()
 
             startA = True
             clock = 0
+            start = time.time()
             prevTime = 0
             count = 0
             fps = FPS().start()
 
-            while True:
-                if self.targetFlag and startA:
-                    print("Target Location: ")
-                    print(self.targetLocation)
-                    startA = False
-                currentTime = time.time()
-                for camera in self.camObjList:
-                    flag, frame, ids, tvec, rvec = self.arucoDetect(camera, arucoSize)
+            DFList = []
+            for i in self.robotArucoIDs:
+                DFList.append(pd.DataFrame({'ID':[i],'Time':0, 'X': 0, 'Y': 0, 'Z': 0, 'Rx':0, 'Ry':0, 'Rz':0}))
+            alpha = pd.concat(DFList, axis=1)
+            #DFList = []
+            with open(pathCSV, 'a') as f:
+                alpha.to_csv(f, header=True, index=False, line_terminator='\n')
 
-                    frame = cv.resize(frame, (640, int(640/camera.aspectRatio)))
+            try:
+                while True:
+                    DFList.clear()
+                    DFList = []
+                    for i in self.robotArucoIDs:
+                        DFList.append(pd.DataFrame( {'ID': [i], 'Time': 0, 'X': 0, 'Y': 0, 'Z': 0, 'Rx': 0, 'Ry': 0,'Rz': 0}))
+                    currentTime = time.time() - start
+                    for camera in self.camObjList:
+                        flag, frame, ids, tvec, rvec = self.arucoDetect(camera, arucoSize)
 
-                    #shows every image, commenting out will make the trials run faster
-                    cv.imshow("cam"+camera.ID, frame)
+                        frame = cv.resize(frame, (640, int(640/camera.aspectRatio)))
 
-                    #stores every image, could be slow
-                    path = "trialCache/trial_"+trialName+"/camera_"+camera.ID+"/image"+str(count).zfill(6)+".png"
-                    print(path)
-                    cv.imwrite(path, frame)
-                    print("WritingDone")
-                    if flag:
-                        for (markID, markTvec, markRvec) in zip(ids, tvec, rvec):
+                        #shows every image, commenting out will make the trials run faster
+                        if self.streamEnable:
+                            cv.imshow("cam"+camera.ID, frame)
 
-                            #if detected marker is the robot's aruco ID, then execute data storage
-                            if markID == self.robotArucoID:
-                                robotWrtCameraTMat = self.rtvec2TMat(markRvec[0], markTvec[0])
-                                #takes the markers location and rotation wrt to the camera and transforms it to a relationship with the global frame
-                                temp = np.dot(camera.cameraWRTGlobalTMat,robotWrtCameraTMat)
-                                self.storeResults(temp, markID, path, clock)
-                                clock += (currentTime - prevTime)
-                                break
+                        if self.writeEnable:
+                            #stores every image, could be slow
+                            path = "trialCache/trial_"+trialName+"/camera_"+camera.ID+"/image"+str(count).zfill(6)+".png"
+                            cv.imwrite(path, frame)
 
-                            #if the targets location is found, relate that location to the global frame and store once
-                            elif markerID == self.targetID and not self.targetFlag:
-                                targetWrtCameraTMat = self.rtvec2TMat(markRvec[0], markTvec[0])
-                                targetWrtGlobalTMat = np.dot(camera.cameraWRTGlobalTMat,targetWrtCameraTMat)
-                                _, targetTvec = self.TMat2rtvec(targetWrtGlobalTMat)
-                                self.targetFlag = True #target location is found
-                                self.targetLocation = targetTvec
+                        if flag:
+                            for (markID, markTvec, markRvec) in zip(ids, tvec, rvec):
+                                #if detected marker is the robot's aruco ID, then execute data storage
+                                #print(markTvec)
+                                if markID in self.robotArucoIDs:
+                                    robotWrtCameraTMat = self.rtvec2TMat(markRvec[0], markTvec[0])
+                                    #takes the markers location and rotation wrt to the camera and transforms it to a relationship with the global frame
+                                    temp = np.dot(camera.cameraWRTGlobalTMat,robotWrtCameraTMat)
 
-                if cv.waitKey(1) == 13:
-                    break
-                prevTime = currentTime
-                count += 1
-                fps.update()
+                                    DFList = self.toDF(DFList, temp, markID, clock)
+                                    #self.storeResults(temp, markID, pathCSV, clock)
+                                    clock += (currentTime - prevTime)
+
+                                #if the targets location is found, relate that location to the global frame and store once
+                                elif markID == self.targetID and not self.targetFlag:
+                                    targetWrtCameraTMat = self.rtvec2TMat(markRvec[0], markTvec[0])
+                                    targetWrtGlobalTMat = np.dot(camera.cameraWRTGlobalTMat,targetWrtCameraTMat)
+                                    _, targetTvec = self.TMat2rtvec(targetWrtGlobalTMat)
+                                    self.targetFlag = True #target location is found
+                                    self.targetLocation = targetTvec
+                    self.storeResults(DFList, pathCSV)
+                    if cv.waitKey(1) == 13:
+                        break
+                    prevTime = currentTime
+                    count += 1
+                    fps.update()
+            except KeyboardInterrupt:
+                print(["Press Ctrl-C to terminate the trial"])
+                pass
             fps.stop()
             print("[INFO]: approx. loops per second: {:.2f}".format(fps.fps()))
             if self.targetFlag:
@@ -116,10 +173,11 @@ class Track:
         frame = camObj.read()
         (corners, ids, rejected) = cv.aruco.detectMarkers(frame, self.arucoDict, parameters = self.arucoParams)
         if len(corners) > 0:
-            rvec, tvec, markerPoints = cv.aruco.estimatePoseSingleMarkers(corners, arucoSize, camobj.mtx, camObj.dist)
+            rvec, tvec, markerPoints = cv.aruco.estimatePoseSingleMarkers(corners, arucoSize, camObj.mtx, camObj.dist)
             (rvec-tvec).any()
             ids = ids.flatten()
-            cv.aruco.drawAxis(frame, camObj.mtx, camObj.dist, rvec, tvec, arucoSize*0.4)
+            for (r, t) in zip(rvec, tvec):
+                cv.aruco.drawAxis(frame, camObj.mtx, camObj.dist, r, t, arucoSize)
             return True, frame, ids, tvec, rvec
         else: return False, frame, 0, 0, 0
 
@@ -129,14 +187,24 @@ class Track:
     #Then the cameras relationship between the CL and L camera is found, then this is pre-multiplied by the left
     #   cameras relationship to the global frame. and so on and so on
     #The relationships will then be stored in the cameras directory with only its relation to the global frame
-    def getCameraRelations2Global(self, globalArucoID, A1ID, A2ID, arucoSize, L):
+    def getCameraRelations2Global(self, globalArucoID, A1ID, A2ID, arucoSize, L, calibMethod):
         flag = True
         path = "calibCache/cam"
         temp = np.array([])
         #sets up the  test board where the translation from one marker to the other marker is a simple translation from
         #   marker 1 to marker 2.
-        A2wrtA1 = np.identity(4)
-        A2wrtA1[1, 3] = L
+
+        #-----------Method #1 -------------#
+        if calibMethod == 1:
+            A2wrtA1 = np.identity(4)
+            A2wrtA1[1,3] = L
+
+        #-----------Method #2 -------------#
+        #Highly accurate providing a perfect world where the cameras are perfectly calibrated with no inaccuracies.
+        if calibMethod == 2:
+            A2wrtA1 = self.getCalBoardTMats(A1ID, A2ID, arucoSize)
+
+        print(A2wrtA1)
         if self.camObjList[0].ID != "L":
             self.printError("Please initialize the left camera to begin extrinsic calibration.", "CalibError:")
             flag = False
@@ -146,8 +214,6 @@ class Track:
                     print("Position marker for the global frame and press [ENTER]:")
                     while True:
                         aDFlag, frame, ids, tvec, rvec = self.arucoDetect(camera, arucoSize)
-                        frame = cv.resize(frame, (640, int(640/camera.aspectRatio)))
-                        cv.imshow("Camera_"+camera.ID, frame)
                         if cv.waitKey(1) == 13 and aDFlag:
                             bool = False
                             for (markID, markTvec, markRvec) in zip(ids, tvec, rvec):
@@ -155,17 +221,18 @@ class Track:
                                     bool = True
                                     globalWRTCameraTMat = self.rtvec2TMat(markRvec[0], markTvec[0])
                                     cameraWRTGlobalTmat = np.linalg.inv(globalWRTCameraTMat)
-                                    np.savetxt(path+self.path4RelMats[index],temp)
                                     temp = cameraWRTGlobalTmat
+                                    np.savetxt(path+self.path4RelMats[index],temp)
                                     break
                             if bool:
                                 cv.destroyAllWindows()
                                 break
                             else: print("Please press [ENTER] to try again!")
-
+                        frame = cv.resize(frame, (640, int(640 / camera.aspectRatio)))
+                        cv.imshow("Camera_" + camera.ID, frame)
                 elif camera.ID != "L":
-                    print("[INFO]: Position markers to be seen by both camera where marker 1 is in previous camera")
-                    print("    and marker 2 is in the next camera")
+                    print("[INFO]: Position markers to be seen by both cameras where marker 1 is in frame 1")
+                    print("    and marker 2 is in frame 2")
                     print("    Both markers need axis projected on them to be considered for this step")
                     print("[INFO]:Then press [ENTER] to test the current images")
                     A1wrtPreviousCameraTMat = np.array([])
@@ -178,12 +245,6 @@ class Track:
                     while True:
                         boolA, frameA, idsA, tvecA, rvecA = self.arucoDetect(self.camObjList[index -1], arucoSize)
                         boolB, frameB, idsB, tvecB, rvecB = self.arucoDetect(camera, arucoSize)
-
-                        frameA = cv.resize(frameA, (640, int(640/self.camObjList[index-1].aspectRatio)))
-                        frameB = cv.resize(frameB, (640, int(640/camera.aspectRatio)))
-
-                        cv.imshow("Camera_"+self.camObjList[index-1].ID, frameA)
-                        cv.imshow("Camera_"+self.camera.ID, frameB)
 
                         if cv.waitKey(1) == 13 and boolA and boolB:
                             test = [False, False]
@@ -204,7 +265,48 @@ class Track:
                                 np.savetxt(path+self.path4RelMats[index],temp)
                                 cv.destroyAllWindows()
                                 break
+                        frameA = cv.resize(frameA, (640, int(640 / self.camObjList[index - 1].aspectRatio)))
+                        frameB = cv.resize(frameB, (640, int(640 / camera.aspectRatio)))
+
+                        cv.imshow("Camera_" + self.camObjList[index - 1].ID, frameA)
+                        cv.imshow("Camera_" + camera.ID, frameB)
             input("Calibration Complete. Press [ENTER] to proceed..")
+
+    def getIndex12(self, A1ID, A2ID, ids):
+        index1 = -1
+        index2 = -1
+        for index, j in enumerate(ids):
+            if j == A1ID:
+                index1 = index
+            if j == A2ID:
+                index2 = index
+        if index1 >= 0 and index2 >= 0:
+            print(True)
+            return True, index1, index2
+        else:
+            return False, -1, -1
+
+    def getCalBoardTMats(self, A1ID, A2ID, arucoSize):
+        print("Please take the test board and place it in one of the camera views then press [ENTER]")
+        while True:
+            for camera in self.camObjList:
+                aDFlag, frame, ids, tvec, rvec = self.arucoDetect(camera, arucoSize)
+                frame = cv.resize(frame, (640, int(640 / camera.aspectRatio)))
+                cv.imshow("Cam_" + camera.ID, frame)
+                if cv.waitKey(1) == 13 and aDFlag:
+                    TBool, index1, index2 = self.getIndex12(A1ID, A2ID, ids)
+                    if TBool:
+                        rvec1 = rvec[index1]
+                        tvec1 = tvec[index1]
+                        TMat1 = self.rtvec2TMat(rvec1[0], tvec1[0])
+                        rvec2 = rvec[index2]
+                        tvec2 = tvec[index2]
+                        TMat2 = self.rtvec2TMat(rvec2[0], tvec2[0])
+                        A2wrtA1 = np.dot(np.linalg.inv(TMat1), TMat2)
+
+                        cv.destroyAllWindows()
+                        return A2wrtA1
+                    else: print("Please try again by pressing [ENTER]")
 
     def printError(self, errorString, errorFlag):
         print("[ERROR]-----------------------------------------------------------------------------------------#")
@@ -238,24 +340,21 @@ class Track:
 
     #Sorts the camera objects to be in the proper order for the project.
     def sortCamObjList(self, camObjList):
-        temp = []
-        tempCL = []
-        for camera in camObjList:
-            temp.append(camera.ID)
-        for i in range(len(temp)):
-            x = temp.index(self.projOrder[i])
-            tempCL.append(camObjList[x])
-        return tempCL
+        if self.sortEnable:
+            temp = []
+            tempCL = []
+            for camera in camObjList:
+                temp.append(camera.ID)
+            for i in range(len(temp)):
+                x = temp.index(self.projOrder[i])
+                tempCL.append(camObjList[x])
+            return tempCL
+        else: return camObjList
 
-    def storeResults(self, robotWRTGlobalTMat, markID, path, clock):
-        rMat, tvec = self.TMat2rtvec(robotWRTGlobalTMat)
-        Rx, Ry, Rz = self.rotationMatrixToEulerAngles(rMat)
-        df = pd.DataFrame({'Time': clock, 'X': tvec[0], 'Y': tvec[1], 'Z': tvec[2], 'Rx':Rx, 'Ry':Ry, 'Rz':Rz})
+    def storeResults(self, DFList, path):
+        alpha = pd.concat(DFList, axis = 1)
         with open(path, 'a') as f:
-            if clock == 0:
-                df.to_csv(f, header=True, index=False, line_terminator='\n')
-            else:
-                df.to_csv(f, header=False, index=False, line_terminator='\n')
+            alpha.to_csv(f, header=False, index=False, line_terminator='\n')
 
     def testGlobalRelations(self):
         for camera in self.camObjList:
@@ -275,5 +374,14 @@ class Track:
                     tvec[0,i] = TMat[i, 3]
         return rMat, tvec
 
+    def toDF(self,DFList, robotWRTGlobalTMat, markID, clock):
+        rMat, tvec = self.TMat2rtvec(robotWRTGlobalTMat)
+        tvec = tvec[0]
+        Rx, Ry, Rz = self.rotationMatrixToEulerAngles(rMat)
+        for index, df in enumerate(DFList):
+            if df.at[0,'ID'] == markID:
+                DFList[index] = pd.DataFrame({'ID': [markID], 'Time': clock, 'X': tvec[0], 'Y': tvec[1], 'Z': tvec[2], 'Rx': Rx, 'Ry': Ry,'Rz': Rz})
+                break
+        return DFList
 
 
