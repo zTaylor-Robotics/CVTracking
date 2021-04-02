@@ -11,16 +11,19 @@ class camObjThreaded:
     #saves path strings for easy reading
     calibPathS = "calibCache/cam"
     calibPathE = ["_mtx.txt", "_dist.txt"]
-    fourcc = cv.VideoWriter_fourcc(*'MJPG')
+    arucoType = "DICT_5x5_100"
+    arucoDict = cv.aruco.Dictionary_get(cv.aruco.DICT_5X5_100)
+    arucoParams = cv.aruco.DetectorParameters_create()
 
-    def __init__(self, src, width = 0, height = 0, globalFrameFlag = False):
+    def __init__(self, src, arucoSize, camOrder, camIDList, width = 0, height = 0):
         #Saves the input variables and default inputs for program use
         self.camNum = int(src)
         self.width = int(width)
         self.height = int(height)
-        self.globalFrameFlag = globalFrameFlag
-
-        # sets testing flags which will be used to halt the stream and to determine if calibration has occured.
+        self.arucoSize = arucoSize
+        self.camOrder = camOrder #Letters associated with the proper order of the cameras  [L,  CL, C,  CR, R]
+        self.camIDList = camIDList #Marker IDs associated with the cameras mentioned above [50, 51, 52, 53, 54]
+        # sets testing flags which will be used to halt the stream and to determine if calibration has occurred.
         self.calibrationFlag = False
         self.stopped = False
 
@@ -28,6 +31,7 @@ class camObjThreaded:
         self.stream = cv.VideoCapture(self.camNum, cv.CAP_DSHOW)
         self.aspectRatio = 0
         (_,self.frame) = self.stream.read()
+        self.uncalibFrame = self.frame
 
         # initializes system parameters with empty/false values
         self.ID = ""
@@ -42,6 +46,8 @@ class camObjThreaded:
 
     def start(self):
         Thread(target=self.update, args=()).start()
+        self.getID()
+        self.setCalib()
         return self
 
     def update(self):
@@ -52,7 +58,7 @@ class camObjThreaded:
                 print("[INFO] Camera " + self.ID + " approx. FPS: {:.2f}".format(fps.fps()))
                 return
             (_, frame) = self.stream.read()
-
+            self.uncalibFrame = frame
             if self.calibrationFlag:
                 h, w = frame.shape[:2]
                 newCameraMatrix, roi = cv.getOptimalNewCameraMatrix(self.mtx, self.dist, (w,h), 1, (w,h))
@@ -67,10 +73,22 @@ class camObjThreaded:
     def read(self):
         if self.calibrationFlag: return self.calibratedFrame
         else: return self.frame
+        
+    def uncalRead(self):
+        return self.uncalibFrame
 
     def stop(self):
         self.stopped = True
         self.stream.release()
+
+    def arucoDetect(self, arucoSize):
+        frame = self.read()
+        (corners, ids, rejected) = cv.aruco.detectMarkers(frame, self.arucoDict, parameters=self.arucoParams)
+        if len(corners) > 0:
+            ids = ids.flatten()
+            return True, ids
+        else:
+            return False, 0
 
     def calibrate(self):
         criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
@@ -89,7 +107,7 @@ class camObjThreaded:
         i = 0
         while i < 20:
             while True:
-                frame = self.read()
+                frame = self.uncalRead()
                 frameS = cv.resize(frame, (640, int(640/self.aspectRatio)))
                 cv.imshow("Calibration", frameS)
                 if cv.waitKey(1) == 13:
@@ -127,6 +145,47 @@ class camObjThreaded:
         self.calibrationFlag = True
         return
 
+    def getID(self):
+        print("Camera_"+str(self.camNum)+" is locating marker...")
+        found = False
+        while True:
+            flag, ids = self.arucoDetect(self.arucoSize)
+            if flag:
+                for id in ids:
+                    try:
+                        index = self.camIDList.index(id)
+                        found = True
+                        break
+                    except ValueError:
+                        found = False
+                        pass
+            if found:
+                self.ID = self.camOrder[index]
+                print("Camera_"+str(self.camNum)+" is cam"+self.ID)
+                return
+
+    def setCalib(self):
+        if path.exists(self.calibPathS + self.ID + "/" + self.ID + "wrtG.txt"):
+            self.cameraWRTGlobalTMat = np.loadtxt(self.calibPathS + self.ID + "/" + self.ID + "wrtG.txt")
+            self.cameraWRTGlobalTMatFlag = True
+            print("#-----Camera Relation to Global Frame is Defined---------#")
+        else:
+            self.printError("Camera relation to global frame is undefined", "CalibError")
+
+        testPath = self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height)
+        if path.exists(testPath + self.calibPathE[0]):
+            if path.exists(testPath + self.calibPathE[1]):
+                self.mtx = np.loadtxt(
+                    self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[0])
+                self.dist = np.loadtxt(
+                    self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[1])
+                self.calibrationFlag = True
+            else:
+                self.printError("Calibration files are not found, please calibrate camera", "CalibError")
+        else:
+            self.printError("Calibration files are not found, please calibrate camera", "CalibError")
+        return
+
     def printError(self, errorString, errorFlag):
         print("[ERROR]-----------------------------------------------------------------------------------------#")
         print("       "+errorFlag+":"+errorString)
@@ -158,31 +217,7 @@ class camObjThreaded:
             self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
 
         (_, frame) = self.stream.read()
-        frame = cv.resize(frame,(640,int(640/self.aspectRatio)))
-        cv.imshow("ID", frame)
-        cv.waitKey(2500)
-        cv.destroyAllWindows()
-        self.ID = input("Please input the camera identity:")
 
-        if path.exists(self.calibPathS + self.ID + "/" + self.ID + "wrtG.txt") and self.globalFrameFlag is True:
-            self.cameraWRTGlobalTMat = np.loadtxt(self.calibPathS + self.ID + "/" + self.ID + "wrtG.txt")
-            self.cameraWRTGlobalTMatFlag = True
-            print("#-----Camera Relation to Global Frame is Defined---------#")
-        else:
-            self.printError("Camera relation to global frame is undefined", "CalibError")
-
-        testPath = self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height)
-        if path.exists(testPath + self.calibPathE[0]):
-            if path.exists(testPath + self.calibPathE[1]):
-                self.mtx = np.loadtxt(
-                    self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[0])
-                self.dist = np.loadtxt(
-                    self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[1])
-                self.calibrationFlag = True
-            else:
-                self.printError("Calibration files are not found, please calibrate camera", "CalibError")
-        else:
-            self.printError("Calibration files are not found, please calibrate camera", "CalibError")
         self.start()
         return
 
@@ -190,7 +225,7 @@ class camObjThreaded:
         print("Press [ENTER] to stop feed.")
         while True:
             frame = self.read()
-            cv.imshow("Camera "+ self.ID, cv.resize(frame, (640, int(640/self.aspectRatio))))
+            cv.imshow("Camera "+ self.ID, frame)
             if cv.waitKey(1) == 13:
                 break
         cv.destroyAllWindows()
