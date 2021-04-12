@@ -23,6 +23,7 @@ class camObjThreaded:
         self.arucoSize = arucoSize
         self.camOrder = camOrder #Letters associated with the proper order of the cameras  [L,  CL, C,  CR, R]
         self.camIDList = camIDList #Marker IDs associated with the cameras mentioned above [50, 51, 52, 53, 54]
+
         # sets testing flags which will be used to halt the stream and to determine if calibration has occurred.
         self.calibrationFlag = False
         self.stopped = False
@@ -146,23 +147,25 @@ class camObjThreaded:
         return
 
     def getID(self):
-        print("Camera_"+str(self.camNum)+" is locating marker...")
-        found = False
-        while True:
-            flag, ids = self.arucoDetect(self.arucoSize)
-            if flag:
-                for id in ids:
-                    try:
-                        index = self.camIDList.index(id)
-                        found = True
-                        break
-                    except ValueError:
-                        found = False
-                        pass
-            if found:
-                self.ID = self.camOrder[index]
-                print("Camera_"+str(self.camNum)+" is cam"+self.ID)
-                return
+        if self.camIDList is not None:
+            print("Camera_" + str(self.camNum) + " is locating marker...")
+            found = False
+            while True:
+                flag, ids = self.arucoDetect(self.arucoSize)
+                if flag:
+                    for id in ids:
+                        try:
+                            index = self.camIDList.index(id)
+                            found = True
+                            break
+                        except ValueError:
+                            found = False
+                            pass
+                if found:
+                    self.ID = self.camOrder[index]
+                    print("Camera_"+str(self.camNum)+" is cam"+self.ID)
+                    return
+        else: self.ID = str(self.camNum)
 
     def setCalib(self):
         if path.exists(self.calibPathS + self.ID + "/" + self.ID + "wrtG.txt"):
