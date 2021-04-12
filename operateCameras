@@ -1,0 +1,38 @@
+import os
+import io
+
+configfile_name = "opCams_config.ini"
+
+if not os.path.isfile(configfile_name):
+    cfgfile = open(configfile_name, "w")
+
+    Config = configparser.ConfigParser()
+    Config.add_section('Camera')
+    Config.set('Camera', 'camera_list', '[0]')
+    Config.set('Camera', 'width', '1280')
+    Config.set('Camera', 'height', '0')
+
+    Config.write(cfgfile)
+    cfgfile.close()
+    print("Config file has been added, please restart the program")
+else:
+    config = configparser.ConfigParser()
+    config.read(configfile_name)
+
+    camList = json.loads(config["Camera"]["camera_list"])
+    camWidth = config['Camera'].getint('width')
+    camHeight = config['Camera'].getint('height')
+    camOrder = None
+    camIDList = None
+    arucoSize = None
+
+    camObjList = []
+    for i in camList:
+        camObjList.append(camObjThreaded(i, arucoSize, camOrder, camIDList, width = camWidth, height = camHeight))
+
+    #Insert Functions Here
+    #---------------------------------------------------------------------------------------------------------------------
+    camObjList[0].showFeed()
+    #---------------------------------------------------------------------------------------------------------------------
+    for j in camObjList:
+        j.stop()
