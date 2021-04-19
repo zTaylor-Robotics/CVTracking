@@ -197,27 +197,29 @@ class camObjThreaded:
 
     #An in-depth start up process which defines camera properties
     def startUp(self):
-        self.stream.set(cv.CAP_PROP_AUTOFOCUS,0)
-        self.stream.set(cv.CAP_PROP_FRAME_WIDTH, 5000)
-        self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, 5000)
-        w = self.stream.get(cv.CAP_PROP_FRAME_WIDTH)
-        h = self.stream.get(cv.CAP_PROP_FRAME_HEIGHT)
-        self.aspectRatio = w/h
-
+        self.stream.set(cv.CAP_PROP_AUTOFOCUS, 0)
         if self.width == 0 or self.height == 0:
+            self.stream.set(cv.CAP_PROP_FRAME_WIDTH, 5000)
+            self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, 5000)
+            w = self.stream.get(cv.CAP_PROP_FRAME_WIDTH)
+            h = self.stream.get(cv.CAP_PROP_FRAME_HEIGHT)
+            self.aspectRatio = w/h
+
             if self.width == 0:
                 self.width = int(self.height * self.aspectRatio)
                 self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
                 self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
 
-            if self.height == 0:
+            elif self.height == 0:
                 self.height = int(self.width / self.aspectRatio)
                 self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
                 self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
 
+            else: print("Error in setting frame size.")
         else:
             self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
             self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
+            self.aspectRatio = self.width/self.height
 
         (_, frame) = self.stream.read()
 
