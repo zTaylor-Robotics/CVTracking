@@ -7,6 +7,8 @@ import numpy as np
 import os
 import time
 import math
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
 
 #NOTE: Global ID will always be 7
 class Track:
@@ -18,6 +20,7 @@ class Track:
     #sets the order for the project and defines all the relational matrices
     projOrder = ["L", "CL", "C", "CR", "R"]
     path4RelMats = ["L/LwrtG.txt", "CL/CLwrtG.txt", "C/CwrtG.txt", "CR/CRwrtG.txt", "R/RwrtG.txt"]
+    path4CamRelMats = ["L/CLwrtL.txt", "CL/LwrtCL.txt", "CL/CwrtCL.txt", "C/CLwrtC.txt", "C/CRwrtC.txt", "CR/CwrtC.txt","CR/RwrtCR.txt","R/CRwrtR.txt"]
 
     #projFlag is the users way of specifying that the
     #-robotArucoID = the ID of the aruco marker which is on top of the robot
@@ -191,6 +194,7 @@ class Track:
         flag = True
         path = "calibCache/cam"
         temp = np.array([])
+        cameraLocations = np.array([])
         #sets up the  test board where the translation from one marker to the other marker is a simple translation from
         #   marker 1 to marker 2.
 
@@ -221,6 +225,8 @@ class Track:
                                     bool = True
                                     globalWRTCameraTMat = self.rtvec2TMat(markRvec[0], markTvec[0])
                                     cameraWRTGlobalTmat = np.linalg.inv(globalWRTCameraTMat)
+                                    _, tvec = self.TMat2rtvec(cameraWRTGlobalTmat)
+                                    cameraLocations.append(tvec)
                                     temp = cameraWRTGlobalTmat
                                     np.savetxt(path+self.path4RelMats[index],temp)
                                     break
@@ -260,7 +266,13 @@ class Track:
                                     break
                             if test[0] and test[1]:
                                 #uses the following maths to get the new TMat
+                                currentCameraWRTpreviousCamera = np.dot(A1wrtPreviousCameraTMat,np.dot(A2wrtA1, np.linalg.inv(A2wrtCurrentCameraTMat)))
+                                np.savetxt(path + self.path4CamRelMats[2*index-2], currentCameraWRTpreviousCamera)
+                                np.savetxt(path + self.path4CamRelMats[2*index-1], np.linalg.inv(currentCameraWRTpreviousCamera))
+                                #temp is the previous camera wrt global frame
                                 currentCameraWRTGlobalTMat = np.dot(temp,np.dot(A1wrtPreviousCameraTMat,np.dot(A2wrtA1, np.linalg.inv(A2wrtCurrentCameraTMat))))
+                                _, tvec = self.TMat2rtvec(cameraWRTGlobalTmat)
+                                cameraLocations.append(tvec)
                                 temp = currentCameraWRTGlobalTMat
                                 np.savetxt(path+self.path4RelMats[index],temp)
                                 cv.destroyAllWindows()
@@ -270,7 +282,24 @@ class Track:
 
                         cv.imshow("Camera_" + self.camObjList[index - 1].ID, frameA)
                         cv.imshow("Camera_" + camera.ID, frameB)
+            self.plotCalibResults(cameraLocations)
             input("Calibration Complete. Press [ENTER] to proceed..")
+
+    def plotCalibResults(self, cameraLocations):
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        x = np.array([])
+        y = np.array([])
+        z = np.array([])
+        for i in range(cameraLocations.shape[0]):
+            x.append(cameraLocations[i][0])
+            y.append(cameraLocations[i][1])
+            z.append(cameraLocations[i][2])
+        ax.scatter(x,y,z, c='r', marker = 'o')
+        ax.set_xlabel('X Label')
+        ax.set_ylabel('Y Label')
+        ax.set_zlabel('Z Label')
+        plt.show()
 
     def getIndex12(self, A1ID, A2ID, ids):
         index1 = -1
@@ -383,5 +412,3 @@ class Track:
                 DFList[index] = pd.DataFrame({'ID': [markID], 'Time': clock, 'X': tvec[0], 'Y': tvec[1], 'Z': tvec[2], 'Rx': Rx, 'Ry': Ry,'Rz': Rz})
                 break
         return DFList
-
-
