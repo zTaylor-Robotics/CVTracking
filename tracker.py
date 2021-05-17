@@ -1,6 +1,5 @@
 from __future__ import print_function
-from camera import camObjThreaded as cmt
-from camera import FPS
+from camera import Cam
 import cv2 as cv
 import pandas as pd
 import numpy as np
@@ -10,405 +9,292 @@ import math
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 
-#NOTE: Global ID will always be 7
 class Track:
-    #Sets the aruco library to a predefined one
-    arucoType = "DICT_5x5_100"
-    arucoDict = cv.aruco.Dictionary_get(cv.aruco.DICT_5X5_100)
-    arucoParams = cv.aruco.DetectorParameters_create()
+    #Sets the aruco library the markers are associated with
+    aruco_type = "DICT_5x5_100"
+    aruco_dict = cv.aruco.Dictionary_get(cv.aruco.DICT_5X5_100)
+    aruco_params = cv.aruco.DetectorParameters_create()
 
-    #sets the order for the project and defines all the relational matrices
-    projOrder = ["L", "CL", "C", "CR", "R"]
-    path4RelMats = ["L/LwrtG.txt", "CL/CLwrtG.txt", "C/CwrtG.txt", "CR/CRwrtG.txt", "R/RwrtG.txt"]
-    path4CamRelMats = ["L/CLwrtL.txt", "CL/LwrtCL.txt", "CL/CwrtCL.txt", "C/CLwrtC.txt", "C/CRwrtC.txt", "CR/CwrtC.txt","CR/RwrtCR.txt","R/CRwrtR.txt"]
+    def __init__(self, cam_list, stream_enable, write_enable, robot_ids):
+        self.cam_list = cam_list
+        self.stream_enable = stream_enable
+        self.write_enable = write_enable
+        self.robot_ids = robot_ids
 
-    #projFlag is the users way of specifying that the
-    #-robotArucoID = the ID of the aruco marker which is on top of the robot
-    #-targetID = the ID of the marker which represents the target
-    def __init__(self, camObjList, streamEnable, write_enable, robotArucoIDs, targetID = 99, sortEnable = True):
-        #Preprocessing step for camera list to arrange the camera objects in proper reading order
-        self.sortEnable = sortEnable
-        self.camObjList = self.sortCamObjList(camObjList)
-        self.streamEnable = streamEnable
-        self.writeEnable = write_enable
-        #Uncomment the following two lines to allow for debugging
-        #self.camObjList = camObjList
-        #self.camObjList[0].cameraWRTGlobalTMatFlag = True
-
-        #Initializes information about the robot: Defaults to 0
-        self.robotArucoIDs = robotArucoIDs
-
-        #Initializes information about the target: Defaults to 99
-        self.targetID = targetID
-        self.targetFlag = False
-        self.targetLocation = np.zeros((1,3))
-
-
-    def getCamError(self, A1ID, A2ID, L, arucoSize):
-        camera = self.camObjList[0]
-
-        pathCSV = "calibCache/cam"+camera.ID+"/camError.csv"
-        csv = open(pathCSV, "w+")
-        csv.close()
-        df = pd.DataFrame({'ID': [0], 'Ex': 0, 'Ey': 0, 'Ez': 0, 'Erx': 0,'Ery': 0, 'Erz': 0})
-        with open(pathCSV, 'a') as f:
-            df.to_csv(f, header=True, index=False, line_terminator='\n')
-        count = 0
-        while True:
-            for camera in self.camObjList:
-                aDFlag, frame, ids, tvec, rvec = self.arucoDetect(camera, arucoSize)
-                frame = cv.resize(frame, (640, int(640 / camera.aspectRatio)))
-                cv.imshow("Cam_" + camera.ID, frame)
-                if aDFlag:
-                    TBool, index1, index2 = self.getIndex12(A1ID, A2ID, ids)
-                    if TBool:
-                        rvec1 = rvec[index1]
-                        tvec1 = tvec[index1]
-                        TMat1 = self.rtvec2TMat(rvec1[0], tvec1[0])
-                        rvec2 = rvec[index2]
-                        tvec2 = tvec[index2]
-                        TMat2 = self.rtvec2TMat(rvec2[0], tvec2[0])
-                        A2wrtA1 = np.dot(np.linalg.inv(TMat1), TMat2)
-                        A2A1rMat, A2A1tvec = self.TMat2rtvec(A2wrtA1)
-                        print(A2A1rMat)
-                        A2A1tvec = A2A1tvec[0]
-                        Rx, Ry, Rz = self.rotationMatrixToEulerAngles(A2A1rMat)
-                        df = pd.DataFrame({'ID':[count], 'Ex': A2A1tvec[0], 'Ey': A2A1tvec[1]-L, 'Ez':A2A1tvec[2], 'Erx':Rx, 'Ery':Ry, 'Erz':Rz})
-                        with open(pathCSV, 'a') as f:
-                            df.to_csv(f, header=False, index=False, line_terminator='\n')
-                        count += 1
-
-                if cv.waitKey(1) == 13:
-                    cv.destroyAllWindows()
-                    return
-
-    #directories need to be deleted of the same name or else these will go poopy-dook
-    def projectTracker(self, trialName, arucoSize):
-        #intial test to see if all the cameras have a defined relationship with the global frame
-        if self.testGlobalRelations():
-            # sets target file target and initializes the file location
-            os.mkdir("trialCache/trial_"+trialName)
-            for camera in self.camObjList:
-                os.mkdir("trialCache/trial_"+trialName+"/camera_"+camera.ID)
-
-            pathCSV = "trialCache/trial_" + trialName + "/data.csv"
-            csv = open(pathCSV, "w+")
-            csv.close()
-
-            startA = True
-            clock = 0
-            start = time.time()
-            prevTime = 0
+#main functions ----------------------------------------------------------------------------#
+    def project_tracker(self, participant_id, aruco_size):
+        #test to see if all cameras have a relationship to the global frame
+        if self.global_test():
+            #creates a file for each participant to store all of their trials
+            os.mkdir("trial_cache/" + participant_id)
             count = 0
-            fps = FPS().start()
+            #Begins trial looping
+            while True:
+                count += 1 #counter for trial number
+                input("Press [ENTER] to begin Trial #" + str(count))
 
-            DFList = []
-            for i in self.robotArucoIDs:
-                DFList.append(pd.DataFrame({'ID':[i],'Time':0, 'X': 0, 'Y': 0, 'Z': 0, 'Rx':0, 'Ry':0, 'Rz':0}))
-            alpha = pd.concat(DFList, axis=1)
-            #DFList = []
-            with open(pathCSV, 'a') as f:
-                alpha.to_csv(f, header=True, index=False, line_terminator='\n')
+                #path creation for different trials
+                trial_name = "trial_" + str(count)
+                path_csv = "trial_cache/" + participant_id + trial_name + "/data.csv"
 
-            try:
-                while True:
-                    DFList.clear()
-                    DFList = []
-                    for i in self.robotArucoIDs:
-                        DFList.append(pd.DataFrame( {'ID': [i], 'Time': 0, 'X': 0, 'Y': 0, 'Z': 0, 'Rx': 0, 'Ry': 0,'Rz': 0}))
-                    currentTime = time.time() - start
-                    for camera in self.camObjList:
-                        flag, frame, ids, tvec, rvec = self.arucoDetect(camera, arucoSize)
+                #folder creation for different trials
+                os.mkdir("trial_cache/" + participant_id + trial_name)
+                for camera in self.cam_list:
+                    os.mkdir("trial_cache/" + participant_id + trial_name + "/camera_" + camera.ID)
+                csv = open(path_csv, "w+")
+                csv.close()
 
-                        frame = cv.resize(frame, (640, int(640/camera.aspectRatio)))
+                #setting the base time function to reset with each trial
+                clock = 0
+                start_time = time.time()
+                current_time = start
+                img_count = 0
 
-                        #shows every image, commenting out will make the trials run faster
-                        if self.streamEnable:
-                            cv.imshow("cam"+camera.ID, frame)
+                #creates data frames for different ids so that each object can be tracked uniquely
+                empty_df_list =[]
 
-                        if self.writeEnable:
-                            #stores every image, could be slow
-                            path = "trialCache/trial_"+trialName+"/camera_"+camera.ID+"/image"+str(count).zfill(6)+".png"
-                            cv.imwrite(path, frame)
+                for i in self.robot_ids:
+                    df = pd.DataFrame({'ID':[i],'Time':0, 'X': 0, 'Y': 0, 'Z': 0, 'Rx':0, 'Ry':0, 'Rz':0})
+                    empty_df_list.append(df)
 
-                        if flag:
-                            for (markID, markTvec, markRvec) in zip(ids, tvec, rvec):
-                                #if detected marker is the robot's aruco ID, then execute data storage
-                                #print(markTvec)
-                                if markID in self.robotArucoIDs:
-                                    robotWrtCameraTMat = self.rtvec2TMat(markRvec[0], markTvec[0])
-                                    #takes the markers location and rotation wrt to the camera and transforms it to a relationship with the global frame
-                                    temp = np.dot(camera.cameraWRTGlobalTMat,robotWrtCameraTMat)
+                empty_df_list = pd.concat(empty_df_list, axis = 1)
+                with open(path_csv, 'a') as f:
+                    empty_df_list.to_csv(f, header = True, index = False, line_terminator = '\n')
 
-                                    DFList = self.toDF(DFList, temp, markID, clock)
-                                    #self.storeResults(temp, markID, pathCSV, clock)
-                                    clock += (currentTime - prevTime)
+                try:
+                    while True:
+                        df_list = []
+                        for i in self.robot_ids:
+                            df = pd.DataFrame({'ID': [i], 'Time': 0, 'X': 0, 'Y': 0, 'Z': 0, 'Rx': 0, 'Ry': 0, 'Rz': 0})
+                            df_list.append(df)
+                        df = pd.DataFrame({'ID': ["Target"], 'Time': 0, 'X': 0, 'Y': 0, 'Z': 0, 'Rx': 0, 'Ry': 0, 'Rz': 0})
+                        df_list.append(df)
+                        #sets time state
+                        previous_time = current_time
+                        current_time = time.time() - start_time
 
-                                #if the targets location is found, relate that location to the global frame and store once
-                                elif markID == self.targetID and not self.targetFlag:
-                                    targetWrtCameraTMat = self.rtvec2TMat(markRvec[0], markTvec[0])
-                                    targetWrtGlobalTMat = np.dot(camera.cameraWRTGlobalTMat,targetWrtCameraTMat)
-                                    _, targetTvec = self.TMat2rtvec(targetWrtGlobalTMat)
-                                    self.targetFlag = True #target location is found
-                                    self.targetLocation = targetTvec
-                    self.storeResults(DFList, pathCSV)
-                    if cv.waitKey(1) == 13:
-                        break
-                    prevTime = currentTime
-                    count += 1
-                    fps.update()
-            except KeyboardInterrupt:
-                print(["Press Ctrl-C to terminate the trial"])
-                pass
-            fps.stop()
-            print("[INFO]: approx. loops per second: {:.2f}".format(fps.fps()))
-            if self.targetFlag:
-                print("[INFO]: Target Location was found at: ")
-                print(self.targetLocation)
-            else: print("[INFO]: Target was not found during the trial")
-            cv.destroyAllWindows()
-            self.targetFlag = False
-            self.targetLocation = 0
+                        #checks each camera from ids
+                        for camera in self.cam_list:
+                            flag, frame, ids, t_vects, r_vects = self.detect_arucos(camera, aruco_size)
+                            frame = cv.resize(frame, (640, int(640 / camera.aspect_ratio)))
+
+                            #shows/saves the frames based on setting chosen in config
+                            if self.stream_enable:
+                                cv.imshow("cam"+camera.ID, frame)
+
+                            if self.write_enable:
+                                path = "trial_cache/" + participant_id + trial_name + "/camera_" + camera.ID\
+                                       + "/image" + str(count).zfill(6) + ".png"
+                                cv.imwrite(path, frame)
+
+                            #if aruco markers were found
+                            if flag:
+                                for(m_id, m_t_vec, m_r_vec) in zip(ids, t_vects, r_vects):
+                                    if m_id in self.robot_ids:
+                                        t_mat = self.vect_to_tmat(m_t_vec[0], m_r_vec[0])
+                                        temp = np.dot(camera.global_relationship, t_mat)
+                                        df_list = self.to_df(df_list, temp, m_id, clock)
+                                        clock += current_time - previous_time
+
+                        self.store_results(df_list, path_csv)
+                        if cv.waitKey(1) == 13:
+                            break
+                        img_count += 1
+                        fps.update()
+                except KeyboardInterrupt:
+                    pass
+                fps.stop()
+                print("Trial #" + str(count) + "has completed...")
+                print("[INFO]: approx. loops per second: {:.2f}".format(fps.fps()))
+                cv.destroyAllWindows()
 
         else: print("Please get the specified camera relationships to the global frame")
 
-    def arucoDetect(self, camObj, arucoSize):
-        frame = camObj.read()
-        (corners, ids, rejected) = cv.aruco.detectMarkers(frame, self.arucoDict, parameters = self.arucoParams)
-        if len(corners) > 0:
-            rvec, tvec, markerPoints = cv.aruco.estimatePoseSingleMarkers(corners, arucoSize, camObj.mtx, camObj.dist)
-            (rvec-tvec).any()
-            ids = ids.flatten()
-            for (r, t) in zip(rvec, tvec):
-                cv.aruco.drawAxis(frame, camObj.mtx, camObj.dist, r, t, arucoSize)
-            return True, frame, ids, tvec, rvec
-        else: return False, frame, 0, 0, 0
+    #gets the camera relationships to the global frame.
+    #stage represents the stage of extrinsic calibration:
+    #----Stage 0 = get all camera relationships to the global frame (fresh start)
+    #----Stage 1 = get new camera relationship to the global frame (additive)
+    #----Stage 2 = re-do a specific camera extrinsic calibration
+    def get_global_relations(self, global_id, id_a, id_b, aruco_size, length, stage = 0, camera_to_change = "99"):
+        #sets up the necessary calibration components
+        path = "calib_cache/cam_"
+        b_wrt_a = np.identity(4)
+        b_wrt_a[1, 3] = length
 
-    #This function gets the 5 cameras relationship to the global frame, this is designed to get all relationships in one go
-    #This may be altered in the future to get single camera relationships if others have been found successfully
-    #The process is done by finding the L cameras relationship to the global frame
-    #Then the cameras relationship between the CL and L camera is found, then this is pre-multiplied by the left
-    #   cameras relationship to the global frame. and so on and so on
-    #The relationships will then be stored in the cameras directory with only its relation to the global frame
-    def getCameraRelations2Global(self, globalArucoID, A1ID, A2ID, arucoSize, L, calibMethod):
-        flag = True
-        path = "calibCache/cam"
-        temp = np.array([])
-        cameraLocations = np.array([])
-        #sets up the  test board where the translation from one marker to the other marker is a simple translation from
-        #   marker 1 to marker 2.
-
-        #-----------Method #1 -------------#
-        if calibMethod == 1:
-            A2wrtA1 = np.identity(4)
-            A2wrtA1[1,3] = L
-
-        #-----------Method #2 -------------#
-        #Highly accurate providing a perfect world where the cameras are perfectly calibrated with no inaccuracies.
-        if calibMethod == 2:
-            A2wrtA1 = self.getCalBoardTMats(A1ID, A2ID, arucoSize)
-
-        print(A2wrtA1)
-        if self.camObjList[0].ID != "L":
-            self.printError("Please initialize the left camera to begin extrinsic calibration.", "CalibError:")
-            flag = False
-        if flag:
-            for index, camera in enumerate(self.camObjList):
-                if camera.ID == "L":
-                    print("Position marker for the global frame and press [ENTER]:")
-                    while True:
-                        aDFlag, frame, ids, tvec, rvec = self.arucoDetect(camera, arucoSize)
-                        if cv.waitKey(1) == 13 and aDFlag:
-                            bool = False
-                            for (markID, markTvec, markRvec) in zip(ids, tvec, rvec):
-                                if markID == globalArucoID:
+        if stage == 0:
+            #get location of the global frame with respect to one of the cameras
+            print("Place the global marker in one of the camera frames")
+            print("Then press [ENTER] to set the global frame")
+            while True:
+                bool = False
+                for camera in self.cam_list:
+                    frame = camera.read()
+                    frame = cv.resize(frame, (640, int(640 / camera.aspect_ratio)))
+                    cv.imshow("Camera_" + camera.ID, frame)
+                if cv.waitKey(500) == 13:
+                    for camera in self.cam_list:
+                        flag, frame, ids, t_vects, r_vects = self.detect_arucos(camera, aruco_size)
+                        if flag:
+                            for (m_id, m_tvect, m_rvect) in zip(ids, t_vects, r_vects):
+                                if m_id == global_id:
                                     bool = True
-                                    globalWRTCameraTMat = self.rtvec2TMat(markRvec[0], markTvec[0])
-                                    cameraWRTGlobalTmat = np.linalg.inv(globalWRTCameraTMat)
-                                    _, tvec = self.TMat2rtvec(cameraWRTGlobalTmat)
-                                    cameraLocations.append(tvec)
-                                    temp = cameraWRTGlobalTmat
-                                    np.savetxt(path+self.path4RelMats[index],temp)
+                                    camera.global_relationship_flag = True
+                                    t_mat = self.vect_to_tmat(m_tvect[0], m_rvect[0])
+                                    t_mat = np.linalg.inv(t_mat)
+                                    camera.global_relationship = t_mat
+                                    np.savetxt(path + camera.ID + "/global_relation.txt",t_mat)
                                     break
-                            if bool:
-                                cv.destroyAllWindows()
-                                break
-                            else: print("Please press [ENTER] to try again!")
-                        frame = cv.resize(frame, (640, int(640 / camera.aspectRatio)))
-                        cv.imshow("Camera_" + camera.ID, frame)
-                elif camera.ID != "L":
-                    print("[INFO]: Position markers to be seen by both cameras where marker 1 is in frame 1")
-                    print("    and marker 2 is in frame 2")
-                    print("    Both markers need axis projected on them to be considered for this step")
-                    print("[INFO]:Then press [ENTER] to test the current images")
-                    A1wrtPreviousCameraTMat = np.array([])
-                    A2wrtCurrentCameraTMat = np.array([])
-                    currentCameraWRTGlobalTMat = np.array([])
+                    print("Press [ENTER] to try again!")
+                if bool:
+                    cv.destroyAllWindows()
+                    break
+            #get relationships between all cameras by dragging the test board between cameras
+            self.global_relations_work(b_wrt_a)
 
-                    #cameraB = current camera
-                    #self.camObjList[index-1] = previous cameraA
-                    #Example: cameraCL = current camera, previous camera = cameraL
-                    while True:
-                        boolA, frameA, idsA, tvecA, rvecA = self.arucoDetect(self.camObjList[index -1], arucoSize)
-                        boolB, frameB, idsB, tvecB, rvecB = self.arucoDetect(camera, arucoSize)
+        elif stage == 1:
+            self.global_relations_work(b_wrt_a)
 
-                        if cv.waitKey(1) == 13 and boolA and boolB:
-                            test = [False, False]
-                            for (markID, markTvec, markRvec) in zip(idsA, tvecA, rvecA):
-                                if markID == A1ID:
-                                    A1wrtPreviousCameraTMat = self.rtvec2TMat(markRvec[0], markTvec[0])
-                                    test[0] = True
-                                    break
-                            for (markID, markTvec, markRvec) in zip(idsB, tvecB, rvecB):
-                                if markID == A2ID:
-                                    A2wrtCurrentCameraTMat = self.rtvec2TMat(markRvec[0], markTvec[0])
-                                    test[1] = True
-                                    break
-                            if test[0] and test[1]:
-                                #uses the following maths to get the new TMat
-                                currentCameraWRTpreviousCamera = np.dot(A1wrtPreviousCameraTMat,np.dot(A2wrtA1, np.linalg.inv(A2wrtCurrentCameraTMat)))
-                                np.savetxt(path + self.path4CamRelMats[2*index-2], currentCameraWRTpreviousCamera)
-                                np.savetxt(path + self.path4CamRelMats[2*index-1], np.linalg.inv(currentCameraWRTpreviousCamera))
-                                #temp is the previous camera wrt global frame
-                                currentCameraWRTGlobalTMat = np.dot(temp,np.dot(A1wrtPreviousCameraTMat,np.dot(A2wrtA1, np.linalg.inv(A2wrtCurrentCameraTMat))))
-                                _, tvec = self.TMat2rtvec(cameraWRTGlobalTmat)
-                                cameraLocations.append(tvec)
-                                temp = currentCameraWRTGlobalTMat
-                                np.savetxt(path+self.path4RelMats[index],temp)
-                                cv.destroyAllWindows()
-                                break
-                        frameA = cv.resize(frameA, (640, int(640 / self.camObjList[index - 1].aspectRatio)))
-                        frameB = cv.resize(frameB, (640, int(640 / camera.aspectRatio)))
+        elif stage == 2:
+            for index, camera in enumerate(self.cam_list):
+                if camera.ID is camera_to_change:
+                    camera.global_relationship_flag = False
+                    break
+            self.global_relations_work(b_wrt_a)
 
-                        cv.imshow("Camera_" + self.camObjList[index - 1].ID, frameA)
-                        cv.imshow("Camera_" + camera.ID, frameB)
-            self.plotCalibResults(cameraLocations)
-            input("Calibration Complete. Press [ENTER] to proceed..")
+    def global_relations_work(self, b_wrt_a):
+        while True:
+            tmat_a_flag = False
+            tmat_b_flag = False
+            cam_a_flag = False
+            cam_b_flag = False
+            bool = False
 
-    def plotCalibResults(self, cameraLocations):
+            for location, camera in enumerate(self.cam_list):
+                flag, frame, ids, t_vects, r_vects = self.detect_arucos(camera, aruco_size)
+                frame = cv.resize(frame, (640, int(640 / camera.aspect_ratio)))
+                cv.imshow("Cam_" + camera.ID, frame)
+
+                if (id_a in ids) and not (id_b in ids):
+                    index = ids.index(id_a)
+                    tmat_a = self.vect_to_tmat(t_vects[index][0], r_vects[index][0])
+                    tmat_a_flag = True
+                    cam_a_flag = camera.global_relationship_flag
+                    cam_a_index = location
+
+                elif (id_b in ids) and not (id_a in ids):
+                    index = ids.index(id_b)
+                    tmat_b = self.vect_to_tmat(t_vects[index][0], r_vects[index][0])
+                    tmat_b_flag = True
+                    cam_b_flag = camera.global_relationship_flag
+                    cam_b_index = location
+
+            if tmat_a_flag and tmat_b_flag and cam_a_flag and not cam_b_flag:
+                global_relation = np.dot(self.cam_list[cam_a_index].global_relationship,
+                                         np.dot(tmat_a, np.dot(b_wrt_a, np.linalg.inv(tmat_b))))
+                np.savetxt(path + self.cam_list[cam_b_index].ID + "/global_relationship.txt", global_relation)
+                self.cam_list[cam_b_index].global_relationship = global_relation
+                self.cam_list[cam_b_index].global_relationship = True
+
+            elif tmat_a_flag and tmat_b_flag and cam_b_flag and not cam_a_flag:
+                global_relation = np.dot(self.cam_list[cam_b_index],
+                                         np.dot(tmat_b, np.dot(np.linalg.inv(b_wrt_a), np.linalg.inv(tmat_a))))
+                np.savetxt(path + self.cam_list[index].ID + "/global_relationship.txt", global_relation)
+                self.cam_list[cam_a_index].global_relationship = global_relation
+                self.cam_list[cam_a_index].global_relationship = True
+
+            count = 0
+            for camera in self.cam_list:
+                if camera.global_relationship_flag:
+                    count += 1
+
+            if count is len(self.cam_list):
+                cv.destroyAllWindows()
+                print("Calibration Complete...")
+                self.plot_results()
+                break
+
+    def plot_results(self):
         fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        x = np.array([])
-        y = np.array([])
-        z = np.array([])
-        for i in range(cameraLocations.shape[0]):
-            x.append(cameraLocations[i][0])
-            y.append(cameraLocations[i][1])
-            z.append(cameraLocations[i][2])
-        ax.scatter(x,y,z, c='r', marker = 'o')
-        ax.set_xlabel('X Label')
-        ax.set_ylabel('Y Label')
-        ax.set_zlabel('Z Label')
+        ax = fig.add_subplot(111, projection = '3d')
+        x = np.empty((0,3), float)
+        y = np.empty((0,3), float)
+        z = np.empty((0,3), float)
+        for camera in self.cam_list:
+            t_vect, _ = self.tmat_to_comp(camera.global_relationship)
+            t = t_vect[0]
+            x = np.append(x, t[0], axis = 0)
+            y = np.append(y, t[1], axis=0)
+            z = np.append(z, t[2], axis=0)
+        ax.scatter(x, y, z, c='r', marker='o')
+        ax.set_xlabel('X(m)')
+        ax.set_ylabel('Y(m))')
+        ax.set_zlabel('Z(m)')
         plt.show()
 
-    def getIndex12(self, A1ID, A2ID, ids):
-        index1 = -1
-        index2 = -1
-        for index, j in enumerate(ids):
-            if j == A1ID:
-                index1 = index
-            if j == A2ID:
-                index2 = index
-        if index1 >= 0 and index2 >= 0:
-            print(True)
-            return True, index1, index2
-        else:
-            return False, -1, -1
+#assisting functions -----------------------------------------------------------------------#
+    def detect_arucos(self, camera, aruco_size):
+        frame = camera.read()
+        (corners, ids, _)  = cv.aruco.detectMarkers(frame, self.aruco_dict, parameters = self.aruco_params)
+        if len(corners) > 0:
+            r_vects, t_vects, mpoints = cv.aruco.estimatePoseSingleMarkers(corners, aruco_size, camera.mtx, camera.dist)
+            (rvec-tvec).any()
+            ids = ids.flatten()
+            for (r, t) in zip(r_vects, t_vects):
+                cv.aruco.drawAxis(frame, camera.mtx, camera.dist, r, t, aruco_size)
+            return True, frame, ids, t_vects, r_vects
+        else: return False, frame, None, None, None
 
-    def getCalBoardTMats(self, A1ID, A2ID, arucoSize):
-        print("Please take the test board and place it in one of the camera views then press [ENTER]")
-        while True:
-            for camera in self.camObjList:
-                aDFlag, frame, ids, tvec, rvec = self.arucoDetect(camera, arucoSize)
-                frame = cv.resize(frame, (640, int(640 / camera.aspectRatio)))
-                cv.imshow("Cam_" + camera.ID, frame)
-                if cv.waitKey(1) == 13 and aDFlag:
-                    TBool, index1, index2 = self.getIndex12(A1ID, A2ID, ids)
-                    if TBool:
-                        rvec1 = rvec[index1]
-                        tvec1 = tvec[index1]
-                        TMat1 = self.rtvec2TMat(rvec1[0], tvec1[0])
-                        rvec2 = rvec[index2]
-                        tvec2 = tvec[index2]
-                        TMat2 = self.rtvec2TMat(rvec2[0], tvec2[0])
-                        A2wrtA1 = np.dot(np.linalg.inv(TMat1), TMat2)
-
-                        cv.destroyAllWindows()
-                        return A2wrtA1
-                    else: print("Please try again by pressing [ENTER]")
-
-    def printError(self, errorString, errorFlag):
-        print("[ERROR]-----------------------------------------------------------------------------------------#")
-        print("       "+errorFlag+":"+errorString)
-        print("#-----------------------------------------------------------------------------------------------#")
-        return
-
-    def rotationMatrixToEulerAngles(self, R):
-        sy = math.sqrt(R[0,0] * R[0,0] +  R[1,0] * R[1,0])
-        singular = sy < 1e-6
-        if not singular:
-            x = math.atan2(R[2, 1], R[2, 2])
-            y = math.atan2(-R[2, 0], sy)
-            z = math.atan2(R[1, 0], R[0, 0])
-        else:
-            x = math.atan2(-R[1, 2], R[1, 1])
-            y = math.atan2(-R[2, 0], sy)
-            z = 0
-        return np.array([x, y, z])
-
-    def rtvec2TMat(self, rvec, tvec):
-        rMat = cv.Rodrigues(rvec)[0]
-        TMat = np.zeros((4, 4))
-        for i in range(4):
-            for j in range(4):
-                if i < 3 and j < 3: TMat[i, j] = rMat[i, j]
-                elif j == 3 and i < 3: TMat[i, 3] = tvec[i]
-                elif i == 3 and j < 3: TMat[3, j] = 0
-                else:TMat[3, 3] = 1
-        return TMat
-
-    #Sorts the camera objects to be in the proper order for the project.
-    def sortCamObjList(self, camObjList):
-        if self.sortEnable:
-            temp = []
-            tempCL = []
-            for camera in camObjList:
-                temp.append(camera.ID)
-            for i in range(len(temp)):
-                x = temp.index(self.projOrder[i])
-                tempCL.append(camObjList[x])
-            return tempCL
-        else: return camObjList
-
-    def storeResults(self, DFList, path):
-        alpha = pd.concat(DFList, axis = 1)
-        with open(path, 'a') as f:
-            alpha.to_csv(f, header=False, index=False, line_terminator='\n')
-
-    def testGlobalRelations(self):
-        for camera in self.camObjList:
-            if not camera.cameraWRTGlobalTMatFlag:
+    def global_test(self):
+        for camera in self.cam_list:
+            if not camera.global_relationship_flag:
                 self.printError("Camera " + camera.ID + ": relationship to global frame is missing", "GlobalFrameError:")
                 return False
         return True
 
-    def TMat2rtvec(self, TMat):
-        rMat = np.zeros((3, 3))
-        tvec = np.zeros((1,3))
+    def vect_to_tmat(self, t_vect, r_vect):
+        r_mat = cv.Rodrigues(r_vect)[0]
+        t_mat = np.zeros((4,4))
+        for i in range(4):
+            for j in range(4):
+                if i < 3 and j < 3: t_mat[i, j] = r_mat[i, j]
+                elif j == 3 and i < 3: t_mat[i, 3] = t_vect[i]
+                elif i == 3 and j < 3: t_mat[3, j] = 0
+                else: t_mat[3, 3] = 1
+        return t_mat
+
+    def tmat_to_comp(self, t_mat):
+        r_mat = np.zeros((3, 3))
+        t_vect = np.zeors((1,3))
         for i in range(3):
             for j in range(4):
-                if j < 3:
-                    rMat[i, j] = TMat[i, j]
-                elif j == 3:
-                    tvec[0,i] = TMat[i, 3]
-        return rMat, tvec
+                if j < 3: r_mat[i, j] = t_mat[i, j]
+                elif j == 3: t_vect[0, i] = t_mat[i, 3]
+        return r_mat, t_vect
 
-    def toDF(self,DFList, robotWRTGlobalTMat, markID, clock):
-        rMat, tvec = self.TMat2rtvec(robotWRTGlobalTMat)
-        tvec = tvec[0]
-        Rx, Ry, Rz = self.rotationMatrixToEulerAngles(rMat)
-        for index, df in enumerate(DFList):
-            if df.at[0,'ID'] == markID:
-                DFList[index] = pd.DataFrame({'ID': [markID], 'Time': clock, 'X': tvec[0], 'Y': tvec[1], 'Z': tvec[2], 'Rx': Rx, 'Ry': Ry,'Rz': Rz})
+    def to_df(self, df_list, t_mat, id, clock):
+        r_mat, t_vect = self. tmat_to_comp(t_mat)
+        t_vect = t_vect[0]
+        r_x, r_y, r_z = self.rmat_to_angles(r_mat)
+        for index, df in enumerate(df_list):
+            if df.at[0,'ID'] == id:
+                df_list[index] = pd.DataFrame({'ID': [markID], 'Time': clock, 'X': t_vect[0], 'Y': t_vect[1], 'Z': t_vect[2], 'Rx': Rx, 'Ry': Ry, 'Rz': Rz})
                 break
-        return DFList
+        return df_list
+
+    def rmat_to_angles(self, r_mat):
+        sy = math.sqrt(r_mat[0, 0] * r_mat[0, 0] + r_mat[1, 0] * r_mat[1, 0])
+        singular = sy < 1e-6
+        if not singular:
+            x = math.atan2(r_mat[2, 1], r_mat[2, 2])
+            y = math.atan2(-r_mat[2, 0], sy)
+            z = math.atan2(r_mat[1, 0], r_mat[0, 0])
+        else:
+            x = math.atan2(-r_mat[1, 2], r_mat[1, 1])
+            y = math.atan2(-r_mat[2, 0], sy)
+            z = 0
+        return np.array([x, y, z])
+
+    def storeResults(self, df_list, path):
+        df_list = pd.concat(df_list, axis = 1)
+        with open(path, 'a') as f:
+            df_list.to_csv(f, header=False, index=False, line_terminator='\n')
