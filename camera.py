@@ -1,54 +1,51 @@
 from __future__ import print_function
 from threading import Thread
 from os import path
+import os
 import numpy as np
 import cv2 as cv
 import datetime
 
 #sudo apt-get install v4l-utils as a possible error fix
-class camObjThreaded:
+class Cam:
+    calib_path_d = "calib_cache/cam_"
+    calib_path_f = ["/mtx.txt", "/dist.txt"]
+    aruco_type = "DICT_5x5_100"
+    aruco_dict = cv.aruco.Dictionary_get(cv.aruco.DICT_5X5_100)
+    aruco_params = cv.aruco.DetectorParameters_create()
 
-    #saves path strings for easy reading
-    calibPathS = "calibCache/cam"
-    calibPathE = ["_mtx.txt", "_dist.txt"]
-    arucoType = "DICT_5x5_100"
-    arucoDict = cv.aruco.Dictionary_get(cv.aruco.DICT_5X5_100)
-    arucoParams = cv.aruco.DetectorParameters_create()
-
-    def __init__(self, src, arucoSize, camOrder, camIDList, width = 0, height = 0):
-        #Saves the input variables and default inputs for program use
-        self.camNum = int(src)
+    def __init__(self, source, cam_id_list, width = 1280, height = 720):
+        self.source = int(source)
         self.width = int(width)
         self.height = int(height)
-        self.arucoSize = arucoSize
-        self.camOrder = camOrder #Letters associated with the proper order of the cameras  [L,  CL, C,  CR, R]
-        self.camIDList = camIDList #Marker IDs associated with the cameras mentioned above [50, 51, 52, 53, 54]
+        self.aspect_ratio = self.width / self.height
+        self.cam_id_list = cam_id_list
 
-        # sets testing flags which will be used to halt the stream and to determine if calibration has occurred.
-        self.calibrationFlag = False
+        #sets testing flags
+        self.calibration_flag = False
         self.stopped = False
+        self.global_relationship_flag = False
 
-        #Creates a camera stream with the opencv VideoCapture
-        self.stream = cv.VideoCapture(self.camNum, cv.CAP_DSHOW)
-        self.aspectRatio = 0
+        #sets initial stream values
+        self.stream = cv.VideoCapture(self.source, cv.CAP_DSHOW)
+        self.stream.set(cv.CAP_PROP_AUTOFOCUS, 0)
+        self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
+        self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
         (_,self.frame) = self.stream.read()
-        self.uncalibFrame = self.frame
 
-        # initializes system parameters with empty/false values
-        self.ID = ""
-        self.cameraWRTGlobalTMat = np.array([])
-        self.cameraWRTGlobalTMatFlag = False
-        self.mtx = np.array([])
-        self.dist = np.array([])
-        self.calibratedFrame = self.frame
+        #attribute initialization without values to be set later
+        self.global_relationship = None
+        self.ID = None
+        self.mtx = None
+        self.dist = None
 
-        #Runs the camera through a start up process
-        self.startUp()
+        self.start()
 
+#threaded stream functions
     def start(self):
-        Thread(target=self.update, args=()).start()
-        self.getID()
-        self.setCalib()
+        Thread(target = self.update, args = ()).start()
+        self.get_id()
+        self.set_calib()
         return self
 
     def update(self):
@@ -58,185 +55,87 @@ class camObjThreaded:
                 fps.stop()
                 print("[INFO] Camera " + self.ID + " approx. FPS: {:.2f}".format(fps.fps()))
                 return
-            (_, frame) = self.stream.read()
-            self.uncalibFrame = frame
-            if self.calibrationFlag:
-                h, w = frame.shape[:2]
-                newCameraMatrix, roi = cv.getOptimalNewCameraMatrix(self.mtx, self.dist, (w,h), 1, (w,h))
-                frame = cv.undistort(frame, self.mtx, self.dist, None, newCameraMatrix)
-                x, y, w, h = roi
-                frame = frame[y:y+h, x:x+w]
-                self.calibratedFrame = frame
-            else:
-                self.frame = frame
+            (_, self.frame) = self.stream.read()
             fps.update()
 
     def read(self):
-        if self.calibrationFlag: return self.calibratedFrame
-        else: return self.frame
-        
-    def uncalRead(self):
-        return self.uncalibFrame
+        return self.frame
 
     def stop(self):
         self.stopped = True
         self.stream.release()
 
-    def arucoDetect(self, arucoSize):
-        frame = self.read()
-        (corners, ids, rejected) = cv.aruco.detectMarkers(frame, self.arucoDict, parameters=self.arucoParams)
-        if len(corners) > 0:
-            ids = ids.flatten()
-            return True, ids
-        else:
-            return False, 0
-
-    def calibrate(self):
-        criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-
-        input('Press [ENTER] to start calibration')
-
-        print('Calibration will take 20 images: ')
-        print('Take checkerboard, position it, and then press [ENTER] to add image to list:')
-
-        objp = np.zeros((6 * 7, 3), np.float32)
-        objp[:, :2] = np.mgrid[0:7, 0:6].T.reshape(-1, 2)
-
-        objpoints = []
-        imgpoints = []
-        count = 0
-        i = 0
-        while i < 20:
-            while True:
-                frame = self.uncalRead()
-                frameS = cv.resize(frame, (640, int(640/self.aspectRatio)))
-                cv.imshow("Calibration", frameS)
-                if cv.waitKey(1) == 13:
-                    break
-
-            gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-            ret, corners = cv.findChessboardCorners(gray, (7, 6), None)
-
-            if ret:
-                objpoints.append(objp)
-                corners2 = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-                imgpoints.append(corners)
-                cv.drawChessboardCorners(frame, (7, 6), corners, ret)
-
-                frame = cv.resize(frame, (640, int(640/self.aspectRatio)))
-                cv.imshow("Good Image", frame)
-                cv.imwrite("calibCache/cam" + self.ID + "/goodImg/img" + str(count) + ".png", frame)
-                cv.waitKey(500)
-            else:
-                print("Image failed, please try again")
-                cv.imwrite("calibCache/cam" + self.ID + "/badImg/img" + str(count) + ".png", frameS)
-                i -= 1
-            i += 1
-            count += 1
-        cv.destroyAllWindows()
-
-        ret, mtx, dist, _, _ = cv.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
-
-        np.savetxt(self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[0], mtx)
-        np.savetxt(self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[1], dist)
-        self.mtx = mtx
-        self.dist = dist
-
-        print('Camera is Calibrated')
-        self.calibrationFlag = True
-        return
-
-    def getID(self):
-        if self.camIDList is not None:
-            print("Camera_" + str(self.camNum) + " is locating marker...")
+#exterior function to the stream
+    def get_id(self):
+        if self.cam_id_list is not None:
+            print("Camera_" + str(self.source) + " is locating marker ...")
             found = False
             while True:
-                flag, ids = self.arucoDetect(self.arucoSize)
+                flag, ids = self.aruco_detect()
                 if flag:
                     for id in ids:
                         try:
-                            index = self.camIDList.index(id)
+                            index = self.cam_id_list.index(id)
                             found = True
                             break
                         except ValueError:
                             found = False
                             pass
                 if found:
-                    self.ID = self.camOrder[index]
-                    print("Camera_"+str(self.camNum)+" is cam"+self.ID)
+                    self.ID = str(self.cam_id_list[index])
+                    print("Camera_" + str(self.source) + " is cam_" + self.ID)
+                    if not path.exists(self.calib_path_d + self.ID):
+                        path_a = self.calib_path_d + self.ID
+                        path_b = self.calib_path_d + self.ID + "/" + str(self.width) + "x" + str(self.height)
+                        os.mkdir(path_a)
+                        os.mkdir(path_b)
+                        file = open(path_b + "/mtx.txt", "w")
+                        file.close()
+                        file = open(path_b + "/dist.txt", "w")
+                        file.close()
                     return
-        else: self.ID = str(self.camNum)
+        else: self.ID = str(self.source)
 
-    def setCalib(self):
-        if path.exists(self.calibPathS + self.ID + "/" + self.ID + "wrtG.txt"):
-            self.cameraWRTGlobalTMat = np.loadtxt(self.calibPathS + self.ID + "/" + self.ID + "wrtG.txt")
-            self.cameraWRTGlobalTMatFlag = True
-            print("#-----Camera Relation to Global Frame is Defined---------#")
-        else:
-            self.printError("Camera relation to global frame is undefined", "CalibError")
+    def set_calib(self):
+        if path.exists(self.calib_path_d + self.ID + "/global_relationship.txt"):
+            self.global_relationship = np.loadtxt(self.calib_path_d + self.ID + "/gobal_relationship.txt")
+            self.global_relationship_flag = True
+            print("...camera relation to global frame is defined")
+        else: self.print_error("Camera relation to global is undefined", "CalibError")
 
-        testPath = self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height)
-        if path.exists(testPath + self.calibPathE[0]):
-            if path.exists(testPath + self.calibPathE[1]):
-                self.mtx = np.loadtxt(
-                    self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[0])
-                self.dist = np.loadtxt(
-                    self.calibPathS + self.ID + "/" + str(self.width) + "x" + str(self.height) + self.calibPathE[1])
-                self.calibrationFlag = True
-            else:
-                self.printError("Calibration files are not found, please calibrate camera", "CalibError")
-        else:
-            self.printError("Calibration files are not found, please calibrate camera", "CalibError")
+        test_path = self.calib_path_d + self.ID + "/" + str(self.width) + "x" + str(self.height)
+        if path.exists(test_path + self.calib_path_f[0]):
+            if path.exists(test_path + self.calib_path_f[1]):
+                self.mtx = np.loadtxt(test_path + self.calib_path_f[0])
+                self.dist = np.loadtxt(test_path+self.calib_path_f[1])
+            else: self.print_error("Calibration files are not found, please calibrate camera", "CalibError")
+        else: self.print_error("Calibration files are not found, please calibrate camera", "CalibError")
         return
 
-    def printError(self, errorString, errorFlag):
+    def aruco_detect(self):
+        frame = self.read()
+        (corners, ids, _) = cv.aruco.detectMarkers(frame, self.aruco_dict, parameters = self.aruco_params)
+        if len(corners) > 0:
+            ids = ids.flatten()
+            return True, ids
+        else:
+            return False, 0
+
+    def print_error(self, error_string, error_flag):
         print("[ERROR]-----------------------------------------------------------------------------------------#")
-        print("       "+errorFlag+":"+errorString)
+        print("       " + error_flag + ":" + error_string)
         print("#-----------------------------------------------------------------------------------------------#")
         return
 
-    #An in-depth start up process which defines camera properties
-    def startUp(self):
-        self.stream.set(cv.CAP_PROP_AUTOFOCUS, 0)
-        if self.width == 0 or self.height == 0:
-            self.stream.set(cv.CAP_PROP_FRAME_WIDTH, 5000)
-            self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, 5000)
-            w = self.stream.get(cv.CAP_PROP_FRAME_WIDTH)
-            h = self.stream.get(cv.CAP_PROP_FRAME_HEIGHT)
-            self.aspectRatio = w/h
-
-            if self.width == 0:
-                self.width = int(self.height * self.aspectRatio)
-                self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
-                self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
-
-            elif self.height == 0:
-                self.height = int(self.width / self.aspectRatio)
-                self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
-                self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
-
-            else: print("Error in setting frame size.")
-        else:
-            self.stream.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
-            self.stream.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
-            self.aspectRatio = self.width/self.height
-
-        (_, frame) = self.stream.read()
-
-        self.start()
-        return
-
-    def showFeed(self):
+    def show_feed(self):
         print("Press [ENTER] to stop feed.")
         while True:
             frame = self.read()
-            cv.imshow("Camera "+ self.ID, frame)
+            cv.imshow("cam_ "+ self.ID, frame)
             if cv.waitKey(1) == 13:
                 break
         cv.destroyAllWindows()
 
-#This class is used to track fps in realtime
-#Only implemented in the calibrated feeds copy and paste in other applications if needed elsewhere
 class FPS:
     def __init__(self):
         self._start = None
