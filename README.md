@@ -1,4 +1,4 @@
-# CVTracking
+# CVTracking v3.07
 Python scripts for tracking fiducials via overhead mounted cameras using the OpenCV API
 
 References: 
